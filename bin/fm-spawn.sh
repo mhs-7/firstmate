@@ -120,7 +120,7 @@
 #   multi-task shell loop (the tool shell is zsh, which does not word-split unquoted
 #   $vars and silently breaks ad-hoc `for ... in $pairs` loops).
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
-#     __BRIEF__    absolute path to data/<task-id>/brief.md
+#     __BRIEF__    absolute path to the task worktree's staged .fm/brief.md
 #     __TURNEND__  absolute path to state/<task-id>.turn-ended (for harnesses whose
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
@@ -128,6 +128,27 @@
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
+# Brief staging: before launch, the brief is copied into the launch checkout (the
+# task worktree, or the secondmate home for --secondmate) as gitignored
+# .fm/brief.md, together with every firstmate-home or firstmate-repo file it
+# references under .fm/refs/<home|root|secondmate>/, and the brief's input paths
+# are rewritten to the absolute path of those copies, so no launch-visible input
+# needs a directory grant outside that checkout. Anything under a firstmate
+# root's own bin/ is firstmate's own code, invoked or sourced in place rather
+# than read as input, so it is never copied into the writable worktree and keeps
+# its real path; an ordinary input outside bin/ that merely carries mode 755 is
+# still staged. Directory references are bounded: a broad firstmate root (bin, data,
+# state, ...) is never staged, and depth/file-count/byte caps skip the rest with
+# a warning. A directory or glob reference is rewritten only when every file it
+# covers was staged, so a partial copy is reported rather than silently handed
+# over. Each map entry rewrites only the exact path it was recorded for, so a
+# staged parent directory can never redirect a longer path underneath it. The
+# deliberate external writes keep their real outside paths: state/<id>.status and
+# a scout's data/<id>/report.md. For opencode, the launch config additionally
+# allows those output directories plus the per-task temp root - in every spelling
+# the crewmate can reach them by - through
+# permission.external_directory (opencode 1.18.10), scoped to this launch so the
+# captain's own opencode config is never touched.
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
 # a firstmate-owned global hook and registry, and a gitignored per-task pointer.
@@ -137,6 +158,11 @@
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
 # success line and state/<id>.meta omit them.
+# When the home session's frozen trace-context decision is enabled (see
+# docs/configuration.md and bin/fm-trace-context-lib.sh), the meta also records
+# one W3C traceparent= carrier, the same value injected into the pane as
+# TRACEPARENT; the default-off path writes neither, leaving the generated meta
+# and launch environment unchanged.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -195,6 +221,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-trace-context-lib.sh
+. "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -720,7 +748,11 @@ launch_template() {
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
-    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # OpenCode 1.18.10 names the outside-worktree gate
+    # `permission.external_directory`. The value is filled in after the task
+    # worktree and the task's external output directories are known, so this
+    # firstmate-only launch rule never changes the captain's global config.
+    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT=__OPENCODE_CONFIG__ opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     pi|pi-signed)
       if [ "$kind" = secondmate ]; then
         printf '%s%s' "$harness" ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -1081,9 +1113,10 @@ if [ "$KIND" = secondmate ]; then
       exit 1
     fi
     CONFIG_INHERIT_LOCK_HELD=1
-    # Inheritance propagation: push the primary-authoritative local inheritance
+    # Inheritance propagation: push the primary-authoritative live-safe local inheritance
     # surface into this secondmate home (fm-config-inherit-lib.sh).
-    propagate_secondmate_inheritance "$FM_HOME" "$PROJ_ABS" "$CONFIG" "$DATA" \
+    FM_CONFIG_INHERIT_LIVE=1 \
+      propagate_secondmate_inheritance "$FM_HOME" "$PROJ_ABS" "$CONFIG" "$DATA" \
       || echo "warning: secondmate $ID inheritance failed for $PROJ_ABS" >&2
   fi
   if [ -f "$PROJ_ABS/data/charter.md" ]; then
@@ -1486,6 +1519,11 @@ EOF
     T="$ORCA_TERMINAL"
     ;;
 esac
+if [ "$KIND" = secondmate ]; then
+  FM_INHERITABLE_CONFIG=trace-context \
+    propagate_inheritable_config "$CONFIG" "$PROJ_ABS/config" \
+    || echo "warning: secondmate $ID trace-context inheritance failed for $PROJ_ABS" >&2
+fi
 # #134 robustness: only tmux needs a worktree-detection target distinct from $T -
 # its rename-safe stable window id, set as WT_TARGET=$WID in the tmux branch above.
 # Every other backend addresses its pane/surface by the id already in $T, so default
@@ -1636,6 +1674,7 @@ fi
 # targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
 TASK_TMP="/tmp/fm-$ID"
 mkdir -p "$TASK_TMP/gotmp"
+TASK_TMP_REAL=$(cd "$TASK_TMP" && pwd -P)
 
 # Per-harness turn-end hook where enabled: a file that touches
 # state/<id>.turn-ended when the agent finishes a turn. Worktree-resident hooks
@@ -1648,9 +1687,665 @@ exclude_path() {
   local rel=$1 EXCL
   EXCL=$(git -C "$WT" rev-parse --git-path info/exclude 2>/dev/null || true)
   [ -n "$EXCL" ] || return 0
+  # git prints --git-path relative to its own working directory, so a checkout
+  # whose git dir is a plain `.git` (a secondmate home clone) answers
+  # `.git/info/exclude`, while a linked worktree answers an absolute common-dir
+  # path. fm-spawn.sh never cds into $WT, so a relative answer has to be
+  # anchored there - otherwise the entry lands in a stray .git next to the
+  # spawn's cwd and the launch checkout reads dirty to every sync and teardown
+  # dirty check.
+  case "$EXCL" in /*) ;; *) EXCL="$WT/$EXCL" ;; esac
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+
+# OpenCode's external-directory permission is still needed for the deliberate
+# firstmate output writes, but brief inputs should not depend on that gate.
+# Copy the brief and the firstmate-home files it names into the task worktree,
+# then rewrite those input references to the copies before any harness sees the
+# launch envelope. The original status and scout-report paths remain external
+# output paths by contract.
+STAGE_DIR="$WT/.fm"
+STAGE_REF_DIR="$STAGE_DIR/refs"
+STAGE_MAP="$STAGE_DIR/path-map"
+STAGE_SOURCES="$STAGE_DIR/source-list"
+STAGE_BRIEF="$STAGE_DIR/brief.md"
+STAGE_OUTPUT_DIR_REAL="$BRIEF_DIR_REAL"
+STAGE_HOME_REAL=$(cd "$FM_HOME" && pwd -P)
+STAGE_ROOT_REAL=$(cd "$FM_ROOT" && pwd -P)
+STAGE_SECOND_HOME_REAL=
+if [ "$KIND" = secondmate ]; then
+  STAGE_SECOND_HOME_REAL=$(cd "$PROJ_ABS" && pwd -P)
+fi
+# Staging runs on the critical path between worktree creation and launch, and a
+# firstmate home holds every prior task's brief and report, so a directory
+# reference is bounded rather than copied wholesale: a broad firstmate root is
+# never a staging source, and a directory or a run that exceeds the depth,
+# file-count, or byte budget is skipped with a warning while its real path is
+# left in the brief.
+STAGE_MAX_DIR_DEPTH=${FM_STAGE_MAX_DIR_DEPTH:-3}
+STAGE_MAX_DIR_FILES=${FM_STAGE_MAX_DIR_FILES:-64}
+STAGE_MAX_DIR_BYTES=${FM_STAGE_MAX_DIR_BYTES:-2097152}
+STAGE_MAX_FILES=${FM_STAGE_MAX_FILES:-256}
+STAGE_MAX_BYTES=${FM_STAGE_MAX_BYTES:-8388608}
+STAGE_MAX_SCAN_DEPTH=${FM_STAGE_MAX_SCAN_DEPTH:-4}
+STAGE_MISSING_NAMED=${FM_STAGE_MISSING_NAMED:-5}
+STAGE_FILE_COUNT=0
+STAGE_BYTE_COUNT=0
+STAGE_SCAN_DEPTH=0
+STAGE_BUDGET_WARNED=0
+
+stage_path_has_glob() {
+  case "$1" in
+    *'*'*|*'?'*|*'['*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+stage_glob_base() {
+  local pattern=$1 prefix
+  prefix=$(printf '%s\n' "$pattern" | sed -E 's/[?*\[].*$//')
+  case "$prefix" in
+    */) prefix=${prefix%/} ;;
+    */*) prefix=${prefix%/*} ;;
+    *) prefix=. ;;
+  esac
+  [ -n "$prefix" ] || prefix=/
+  printf '%s\n' "$prefix"
+}
+
+stage_root_path() {
+  case "$1" in
+    home) printf '%s\n' "$FM_HOME" ;;
+    root) printf '%s\n' "$FM_ROOT" ;;
+    secondmate)
+      # Only a secondmate spawn owns a firstmate home at PROJ_ABS. On a crewmate
+      # spawn PROJ_ABS is the project checkout, which is not a staging root.
+      [ "$KIND" = secondmate ] || return 1
+      printf '%s\n' "${PROJ_ABS:-}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+stage_root_real() {
+  case "$1" in
+    home) printf '%s\n' "$STAGE_HOME_REAL" ;;
+    root) printf '%s\n' "$STAGE_ROOT_REAL" ;;
+    secondmate)
+      [ "$KIND" = secondmate ] || return 1
+      printf '%s\n' "$STAGE_SECOND_HOME_REAL"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+stage_kind_for_path() {
+  local path=$1
+  case "$path" in
+    "$FM_HOME"/*|"$STAGE_HOME_REAL"/*) printf 'home\n'; return 0 ;;
+    "$FM_ROOT"/*|"$STAGE_ROOT_REAL"/*) printf 'root\n'; return 0 ;;
+    "$PROJ_ABS"/*|"$STAGE_SECOND_HOME_REAL"/*)
+      [ "$KIND" = secondmate ] || return 1
+      printf 'secondmate\n'
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+stage_rel_for_path() {
+  local kind=$1 path=$2 root root_real rel
+  root=$(stage_root_path "$kind") || return 1
+  root_real=$(stage_root_real "$kind") || return 1
+  [ -n "$root" ] || return 1
+  [ -n "$root_real" ] || return 1
+  case "$path" in
+    "$root"/*) rel=${path#"$root"/} ;;
+    "$root_real"/*) rel=${path#"$root_real"/} ;;
+    *) return 1 ;;
+  esac
+  case "$rel" in
+    ''|/*|.|..|../*|*/../*) return 1 ;;
+  esac
+  printf '%s\n' "$rel"
+}
+
+stage_rel_for_reference() {
+  local kind=$1 reference=$2
+  if [ "${reference#/}" != "$reference" ]; then
+    stage_rel_for_path "$kind" "$reference"
+  else
+    reference=${reference#./}
+    case "$reference" in
+      ''|/*|.|..|../*|*/../*) return 1 ;;
+    esac
+    printf '%s\n' "$reference"
+  fi
+}
+
+# Staged targets are absolute paths inside the launch checkout, not worktree-
+# relative ones: a rewritten brief is read by an agent whose working directory
+# is not guaranteed to be the worktree root (a bash tool call from a
+# subdirectory, or an EXIT trap that fires after a `cd`), and an absolute path
+# under $WT still needs no directory grant outside the checkout.
+stage_target_for_path() {
+  local kind=$1 path=$2 rel
+  rel=$(stage_rel_for_path "$kind" "$path") || return 1
+  printf '%s/.fm/refs/%s/%s\n' "$WT" "$kind" "$rel"
+}
+
+stage_target_for_reference() {
+  local kind=$1 reference=$2 rel
+  rel=$(stage_rel_for_reference "$kind" "$reference") || return 1
+  printf '%s/.fm/refs/%s/%s\n' "$WT" "$kind" "$rel"
+}
+
+# Nothing under a firstmate root's own bin/ is ever a brief input: it is
+# firstmate's own code, invoked or sourced in place. Staging any of it would hand
+# the crewmate a writable copy of trusted code - an enforcement script such as
+# bin/fm-herdr-lab.sh inside the very laboratory it isolates, or a library whose
+# `. "$(dirname "${BASH_SOURCE[0]}")/..."` sibling never came along - and would
+# repoint an invocation that has to work from any directory. The path is the
+# whole test, deliberately: the exec bit and a shebang do not distinguish
+# firstmate code from anything else (a third of bin/ is mode 644 and some of that
+# carries no shebang). An ordinary input outside bin/ that merely carries mode
+# 755, such as a repro script a prior scout wrote under data/<task>/, is still
+# staged.
+stage_is_program() {
+  local path=$1 kind rel
+  kind=$(stage_kind_for_path "$path" 2>/dev/null || true)
+  [ -n "$kind" ] || return 1
+  rel=$(stage_rel_for_path "$kind" "$path" 2>/dev/null || true)
+  case "$rel" in
+    bin/*) return 0 ;;
+  esac
+  return 1
+}
+
+stage_path_within_root() {
+  local root=$1 path=$2
+  # An empty root would degenerate into the pattern `/*` and accept every
+  # absolute path, so a missing root is never a containment match.
+  [ -n "$root" ] || return 1
+  case "$path" in
+    "$root"|"$root"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+stage_target_parent_safe() {
+  local target=$1 parent
+  case "$target" in
+    "$WT"/*) ;;
+    *)
+      echo "error: staged target escapes the task worktree: $target" >&2
+      return 1
+      ;;
+  esac
+  while [ "$target" != "$WT" ]; do
+    if [ -L "$target" ]; then
+      echo "error: staged target traverses a symlink in the task worktree: $target" >&2
+      return 1
+    fi
+    parent=$(dirname "$target")
+    [ "$parent" != "$target" ] || return 1
+    target=$parent
+  done
+}
+
+stage_resolve_file_real() {
+  local path=$1 link target dir
+  while [ -L "$path" ]; do
+    link=$(readlink "$path") || return 1
+    case "$link" in
+      /*) target=$link ;;
+      *) target="$(dirname "$path")/$link" ;;
+    esac
+    path=$target
+  done
+  dir=$(cd "$(dirname "$path")" 2>/dev/null && pwd -P) || return 1
+  printf '%s/%s\n' "$dir" "$(basename "$path")"
+}
+
+stage_add_map() {
+  local old=$1 new=$2
+  [ -n "$old" ] || return 0
+  if ! awk -F '\t' -v old="$old" -v new="$new" \
+    '$1 == old && $2 == new { found=1 } END { exit(found ? 0 : 1) }' \
+    "$STAGE_MAP" 2>/dev/null; then
+    printf '%s\t%s\n' "$old" "$new" >> "$STAGE_MAP"
+  fi
+}
+
+stage_scan_references() {
+  FM_STAGE_HOME="$FM_HOME" \
+  FM_STAGE_HOME_REAL="$STAGE_HOME_REAL" \
+  FM_STAGE_ROOT="$FM_ROOT" \
+  FM_STAGE_ROOT_REAL="$STAGE_ROOT_REAL" \
+  FM_STAGE_SECOND_HOME="${PROJ_ABS:-}" \
+  FM_STAGE_SECOND_HOME_REAL="$STAGE_SECOND_HOME_REAL" \
+    perl -0 - "$1" <<'PERL'
+use strict;
+use warnings;
+
+my %seen;
+sub emit {
+  my ($path) = @_;
+  return if !defined($path) || $path eq "";
+  $path =~ s/\r$//;
+  return if $seen{$path}++;
+  print "$path\n";
+}
+
+local $/;
+$_ = <>;
+
+for my $root (
+  $ENV{FM_STAGE_HOME}, $ENV{FM_STAGE_HOME_REAL},
+  $ENV{FM_STAGE_ROOT}, $ENV{FM_STAGE_ROOT_REAL},
+  $ENV{FM_STAGE_SECOND_HOME}, $ENV{FM_STAGE_SECOND_HOME_REAL},
+) {
+  next if !defined($root) || $root eq "";
+  $root =~ s{/$}{};
+  # Briefs commonly wrap paths in Markdown backticks. Keep spaces inside the
+  # rooted path so a home such as `/Users/.../cfb models/firstmate` is still
+  # recognized, then trim sentence punctuation before staging it.
+  while (/\Q$root\E\/[^`'"()\[\]{}>,;:\r\n]+/g) {
+    my $path = $&;
+    $path =~ s/[.!?]+$//;
+    emit($path);
+  }
+}
+
+while (/(?:^|[^A-Za-z0-9_.\/-])((?:data)\/[A-Za-z0-9._*?\/-]+)/g) {
+  emit($1);
+}
+
+while (/(?:^|[^A-Za-z0-9_.\/-])((?:state)\/[A-Za-z0-9._*?\/-]+\.status)/g) {
+  emit($1);
+}
+PERL
+}
+
+# The deliberate external writes, in every spelling a brief can name them by.
+# This is the single source of truth for both "never stage this" and "never
+# rewrite this", so a staged parent directory cannot redirect an output path.
+stage_external_outputs() {
+  printf '%s\n' \
+    "${STATE}/${ID}.status" \
+    "${STATE_REAL}/${ID}.status" \
+    "${FM_HOME}/state/${ID}.status" \
+    "${STAGE_HOME_REAL}/state/${ID}.status" \
+    "${DATA}/${ID}/report.md" \
+    "${STAGE_OUTPUT_DIR_REAL}/report.md" \
+    "${FM_HOME}/data/${ID}/report.md" \
+    "${STAGE_HOME_REAL}/data/${ID}/report.md"
+}
+
+stage_preserve_external() {
+  local candidate
+  while IFS= read -r candidate; do
+    if [ "$candidate" = "$1" ]; then
+      return 0
+    fi
+  done < <(stage_external_outputs)
+  return 1
+}
+
+stage_reference_has_matches() {
+  local source=$1 base match
+  if [ -e "$source" ]; then
+    return 0
+  fi
+  stage_path_has_glob "$source" || return 1
+  base=$(stage_glob_base "$source")
+  [ -d "$base" ] || return 1
+  match=$(find "$base" -type f -path "$source" -print -quit 2>/dev/null || true)
+  [ -n "$match" ]
+}
+
+stage_file_size() {
+  local size
+  size=$(wc -c < "$1" 2>/dev/null || true)
+  size=${size//[!0-9]/}
+  printf '%s\n' "${size:-0}"
+}
+
+# A firstmate root and its top-level buckets are the whole repo, the whole home,
+# or every prior task's brief and report. None of them is a deliberate brief
+# input, so they are never staging sources.
+stage_is_broad_root() {
+  local kind=$1 dir=$2 rel
+  rel=$(stage_rel_for_path "$kind" "$dir" 2>/dev/null || true)
+  [ -n "$rel" ] || return 0
+  case "${rel%/}" in
+    bin|data|state|logs|config|projects|.git) return 0 ;;
+    .git/*) return 0 ;;
+  esac
+  return 1
+}
+
+stage_dir_within_caps() {
+  local dir=$1 count=0 bytes=0 file size
+  if [ -n "$(find "$dir" -mindepth "$((STAGE_MAX_DIR_DEPTH + 1))" -print -quit 2>/dev/null)" ]; then
+    echo "warning: not staging firstmate directory nested deeper than $STAGE_MAX_DIR_DEPTH levels: $dir" >&2
+    return 1
+  fi
+  while IFS= read -r file; do
+    count=$((count + 1))
+    if [ "$count" -gt "$STAGE_MAX_DIR_FILES" ]; then
+      echo "warning: not staging firstmate directory holding more than $STAGE_MAX_DIR_FILES files: $dir" >&2
+      return 1
+    fi
+    size=$(stage_file_size "$file")
+    bytes=$((bytes + size))
+    if [ "$bytes" -gt "$STAGE_MAX_DIR_BYTES" ]; then
+      echo "warning: not staging firstmate directory larger than $STAGE_MAX_DIR_BYTES bytes: $dir" >&2
+      return 1
+    fi
+  done < <(find "$dir" -type f -print)
+  return 0
+}
+
+stage_budget_allows() {
+  local size=$1
+  if [ "$STAGE_FILE_COUNT" -ge "$STAGE_MAX_FILES" ] || [ "$((STAGE_BYTE_COUNT + size))" -gt "$STAGE_MAX_BYTES" ]; then
+    if [ "$STAGE_BUDGET_WARNED" -eq 0 ]; then
+      STAGE_BUDGET_WARNED=1
+      echo "warning: staged firstmate reference budget exhausted ($STAGE_MAX_FILES files / $STAGE_MAX_BYTES bytes); remaining references keep their real paths" >&2
+    fi
+    return 1
+  fi
+  return 0
+}
+
+# Exit status: 0 staged (or already staged), 2 deliberately not staged so the
+# caller keeps the real path, 1 a hard failure that must fail the spawn.
+stage_file() {
+  local source=$1 kind=$2 source_real root_real target nested_reference size
+  stage_is_program "$source" && return 2
+  source_real=$(stage_resolve_file_real "$source") || {
+    echo "error: cannot resolve staged firstmate reference: $source" >&2
+    return 1
+  }
+  root_real=$(stage_root_real "$kind" 2>/dev/null || true)
+  stage_path_within_root "$root_real" "$source_real" || {
+    echo "error: staged firstmate reference escapes its home: $source" >&2
+    return 1
+  }
+  target=$(stage_target_for_path "$kind" "$source") || {
+    echo "error: cannot map staged firstmate reference: $source" >&2
+    return 1
+  }
+  if grep -Fqx "$kind$(printf '\t')$source" "$STAGE_SOURCES" 2>/dev/null; then
+    return 0
+  fi
+  size=$(stage_file_size "$source")
+  stage_budget_allows "$size" || return 2
+  stage_target_parent_safe "$target" || return 1
+  mkdir -p "$(dirname "$target")" || {
+    echo "error: cannot create the staged reference directory for: $source" >&2
+    return 1
+  }
+  cp -p "$source" "$target" || {
+    echo "error: cannot stage firstmate reference: $source" >&2
+    return 1
+  }
+  STAGE_FILE_COUNT=$((STAGE_FILE_COUNT + 1))
+  STAGE_BYTE_COUNT=$((STAGE_BYTE_COUNT + size))
+  printf '%s\t%s\n' "$kind" "$source" >> "$STAGE_SOURCES"
+  stage_add_map "$source" "$target"
+  # A staged copy may itself name further firstmate paths, but that recursion is
+  # bounded so a cycle of cross-referencing briefs cannot walk the whole home.
+  [ "$STAGE_SCAN_DEPTH" -lt "$STAGE_MAX_SCAN_DEPTH" ] || return 0
+  STAGE_SCAN_DEPTH=$((STAGE_SCAN_DEPTH + 1))
+  while IFS= read -r nested_reference; do
+    [ -n "$nested_reference" ] || continue
+    stage_reference "$nested_reference" || return 1
+  done < <(stage_scan_references "$source")
+  STAGE_SCAN_DEPTH=$((STAGE_SCAN_DEPTH - 1))
+  return 0
+}
+
+# A reference is rewritten only when EVERY file it covers was staged. A skipped
+# enforcement script, a refused directory, or an exhausted budget leaves the real
+# path in the brief and says exactly what is missing, so the agent is never sent
+# to a staged copy that silently lacks the file it was sent for.
+stage_missing_reset() {
+  STAGE_MISSING_COUNT=0
+  STAGE_MISSING_LIST=
+}
+
+stage_missing_add() {
+  STAGE_MISSING_COUNT=$((STAGE_MISSING_COUNT + 1))
+  if [ "$STAGE_MISSING_COUNT" -le "$STAGE_MISSING_NAMED" ]; then
+    STAGE_MISSING_LIST=${STAGE_MISSING_LIST:+$STAGE_MISSING_LIST, }$1
+  fi
+}
+
+stage_missing_warn() {
+  local reference=$1 suffix=
+  [ "$STAGE_MISSING_COUNT" -gt "$STAGE_MISSING_NAMED" ] \
+    && suffix=" (and $((STAGE_MISSING_COUNT - STAGE_MISSING_NAMED)) more)"
+  echo "warning: keeping the real path for firstmate reference $reference; $STAGE_MISSING_COUNT file(s) under it were not staged: $STAGE_MISSING_LIST$suffix" >&2
+}
+
+stage_source() {
+  local source=$1 kind=$2 reference=$3 target base file rc matched
+  local STAGE_MISSING_COUNT STAGE_MISSING_LIST
+  stage_missing_reset
+  stage_is_program "$source" && return 0
+  target=$(stage_target_for_reference "$kind" "$reference") || {
+    echo "error: cannot map firstmate reference: $reference" >&2
+    return 1
+  }
+  if [ -d "$source" ]; then
+    local source_real root_real
+    source_real=$(cd "$source" 2>/dev/null && pwd -P) || return 1
+    root_real=$(stage_root_real "$kind" 2>/dev/null || true)
+    stage_path_within_root "$root_real" "$source_real" || {
+      echo "error: staged firstmate directory escapes its home: $source" >&2
+      return 1
+    }
+    if stage_is_broad_root "$kind" "$source"; then
+      echo "warning: not staging broad firstmate root: $source" >&2
+      return 0
+    fi
+    stage_dir_within_caps "$source" || return 0
+    while IFS= read -r file; do
+      stage_file "$file" "$kind"
+      rc=$?
+      case "$rc" in
+        0) ;;
+        2) stage_missing_add "$file" ;;
+        *) return 1 ;;
+      esac
+    done < <(find "$source" -type f -print)
+    if [ "$STAGE_MISSING_COUNT" -gt 0 ]; then
+      stage_missing_warn "$reference"
+      return 0
+    fi
+    [ -d "$target" ] && stage_add_map "$reference" "$target"
+    return 0
+  fi
+  if [ -f "$source" ]; then
+    stage_file "$source" "$kind"
+    rc=$?
+    [ "$rc" -eq 1 ] && return 1
+    [ "$rc" -eq 0 ] && [ -f "$target" ] && stage_add_map "$reference" "$target"
+    return 0
+  fi
+  stage_path_has_glob "$source" || return 0
+  base=$(stage_glob_base "$source")
+  [ -d "$base" ] || return 0
+  matched=0
+  while IFS= read -r file; do
+    stage_file "$file" "$kind"
+    rc=$?
+    case "$rc" in
+      0) matched=1 ;;
+      2) stage_missing_add "$file" ;;
+      *) return 1 ;;
+    esac
+  done < <(find "$base" -type f -path "$source" -print)
+  if [ "$STAGE_MISSING_COUNT" -gt 0 ]; then
+    stage_missing_warn "$reference"
+    return 0
+  fi
+  if [ "$matched" -eq 1 ]; then
+    stage_add_map "$reference" "$target"
+  fi
+  return 0
+}
+
+stage_reference() {
+  local reference=$1 kind root source
+  [ -n "$reference" ] || return 0
+  case "$reference" in
+    state/"$ID".status)
+      stage_add_map "$reference" "$STATE_REAL/$ID.status"
+      return 0
+      ;;
+    data/"$ID"/report.md)
+      stage_add_map "$reference" "$STAGE_OUTPUT_DIR_REAL/report.md"
+      return 0
+      ;;
+  esac
+  stage_preserve_external "$reference" && return 0
+  case "$reference" in
+    /*)
+      kind=$(stage_kind_for_path "$reference" 2>/dev/null || true)
+      [ -n "$kind" ] || return 0
+      stage_source "$reference" "$kind" "$reference"
+      ;;
+    data/*|state/*)
+      # An existing project-relative data or state path belongs to the project,
+      # not the firstmate home, so leave that path untouched.
+      [ -e "$WT/$reference" ] && return 0
+      for kind in home root secondmate; do
+        root=$(stage_root_path "$kind" 2>/dev/null || true)
+        [ -n "$root" ] || continue
+        source="$root/$reference"
+        if stage_reference_has_matches "$source"; then
+          stage_source "$source" "$kind" "$reference"
+          return $?
+        fi
+      done
+      # A missing firstmate data path is not an input file. Leave it untouched
+      # so a future output path is not silently redirected into the worktree.
+      ;;
+  esac
+}
+
+stage_rewrite_file() {
+  FM_STAGE_MAP="$STAGE_MAP" perl -0pi - "$1" <<'PERL'
+use strict;
+use warnings;
+
+open my $map, "<", $ENV{FM_STAGE_MAP} or die "cannot read staged path map: $!\n";
+my (@pairs, %repl);
+{
+  local $/ = "\n";
+  while (my $line = <$map>) {
+    chomp $line;
+    my ($old, $new) = split(/\t/, $line, 2);
+    next if !defined($old) || !defined($new) || $old eq "";
+    next if exists $repl{$old};
+    $repl{$old} = $new;
+    push @pairs, $old;
+  }
+}
+if (@pairs) {
+  # Longest first so a staged parent directory never wins over the longer
+  # path it contains, and one single pass so a replacement is never itself
+  # rewritten by a later pair.
+  @pairs = sort { length($b) <=> length($a) } @pairs;
+  # Every mapping rewrites only the exact path it was recorded for. A staged
+  # directory therefore cannot extend itself over a longer path underneath it,
+  # so a file the brief names inside a staged directory but that was never
+  # staged - a not-yet-created output, or one skipped by the staging caps -
+  # keeps its real path instead of being silently redirected into the worktree.
+  my $alternation = join "|", map {
+    my $quoted = quotemeta($_);
+    # A relative output alias can also be the suffix of an absolute path that
+    # must stay external, so it needs the stricter leading boundary.
+    m{^/} ? "(?<![A-Za-z0-9_.-])$quoted" : "(?<![A-Za-z0-9_./-])$quoted";
+  } @pairs;
+  # Require a trailing path boundary so a path is never rewritten as the
+  # prefix of a sibling name or of a longer extension, while a path that ends
+  # a sentence still matches.
+  s{($alternation)(?![A-Za-z0-9_-])(?!/[A-Za-z0-9_.-])(?!\.[A-Za-z0-9])}{ $repl{$1} // $1 }ge;
+}
+PERL
+}
+
+stage_launch_brief() {
+  local reference
+  stage_target_parent_safe "$STAGE_REF_DIR/.firstmate-stage" || return 1
+  mkdir -p "$STAGE_REF_DIR" || {
+    echo "error: cannot create the staged reference directory: $STAGE_REF_DIR" >&2
+    return 1
+  }
+  # The staging directory is firstmate-owned, so a respawn may refresh its
+  # generated files safely. Every unchecked step below fails the spawn instead:
+  # `set -e` is suppressed for this whole function by its `|| exit 1` caller, so
+  # a silent failure here would launch a brief that still names outside-worktree
+  # paths, which is exactly the condition staging exists to remove.
+  while IFS= read -r reference; do
+    rm -f "$reference" || {
+      echo "error: cannot clear the stale staged reference: $reference" >&2
+      return 1
+    }
+  done < <(find "$STAGE_REF_DIR" -type f -print 2>/dev/null)
+  : > "$STAGE_MAP" || {
+    echo "error: cannot reset the staged path map: $STAGE_MAP" >&2
+    return 1
+  }
+  : > "$STAGE_SOURCES" || {
+    echo "error: cannot reset the staged source list: $STAGE_SOURCES" >&2
+    return 1
+  }
+  # Claim the deliberate external writes first: mapping each one to itself
+  # pins it through the single rewrite pass, so no staged parent directory can
+  # redirect the status file or the scout report into the worktree.
+  while IFS= read -r reference; do
+    stage_add_map "$reference" "$reference"
+  done < <(stage_external_outputs)
+  stage_target_parent_safe "$STAGE_BRIEF" || return 1
+  cp -p "$BRIEF" "$STAGE_BRIEF" || {
+    echo "error: cannot stage launch brief: $BRIEF" >&2
+    return 1
+  }
+  stage_add_map "$BRIEF" "$STAGE_BRIEF"
+  case "$BRIEF" in
+    "$FM_HOME"/*) stage_add_map "${BRIEF#"$FM_HOME"/}" "$STAGE_BRIEF" ;;
+    "$STAGE_HOME_REAL"/*) stage_add_map "${BRIEF#"$STAGE_HOME_REAL"/}" "$STAGE_BRIEF" ;;
+  esac
+  while IFS= read -r reference; do
+    [ -n "$reference" ] || continue
+    stage_reference "$reference" || return 1
+  done < <(stage_scan_references "$BRIEF")
+  stage_rewrite_file "$STAGE_BRIEF" || {
+    echo "error: cannot rewrite the staged launch brief: $STAGE_BRIEF" >&2
+    return 1
+  }
+  while IFS= read -r reference; do
+    stage_rewrite_file "$reference" || {
+      echo "error: cannot rewrite the staged firstmate reference: $reference" >&2
+      return 1
+    }
+  done < <(find "$STAGE_REF_DIR" -type f -print)
+  # `git rev-parse --git-path info/exclude` resolves to the COMMON git dir, so
+  # this entry ignores `.fm/` repo-wide for every checkout of the project, not
+  # only for this worktree.
+  exclude_path '.fm/'
+  BRIEF="$STAGE_BRIEF"
+  BRIEF_DIR_REAL="$WT/.fm"
+  BRIEF_REAL="$STAGE_BRIEF"
+}
+
+stage_launch_brief || exit 1
 if [ "$KIND" != secondmate ]; then
   # Arm the semantic busy-state contract (bin/fm-busy-lib.sh) for every
   # adapter with a verified semantic source. The launch brief sent below IS a
@@ -1887,6 +2582,24 @@ elif [ "$KIND" = scout ]; then
   YOLO=
 fi
 
+# Resolve the optional default-off W3C trace context (bin/fm-trace-context-lib.sh,
+# docs/configuration.md): the one carrier both recorded in meta and injected into
+# the pane, so an observer reads exactly what the child receives. Empty only when
+# disabled or on entropy/validation failure. Reuses this task's already-recorded
+# value on relaunch; any other spawn roots a fresh trace, never adopting this
+# process's own ambient TRACEPARENT, so each routed task is its own trace
+# boundary even under a persistent supervisor. Never aborts the spawn and adds
+# only the cost of reading a few bytes of entropy.
+#
+# The session-start path owns input resolution. Spawn consumes only the frozen
+# home-session state and reuses it for the carrier and Secondmate launch prefix.
+SPAWN_TRACE_EFFECTIVE=$(fm_trace_context_session_effective "$STATE/.trace-context-effective")
+if [ "$SPAWN_TRACE_EFFECTIVE" = on ]; then
+  SPAWN_TRACEPARENT=$(FM_TRACE_CONTEXT=on fm_trace_context_resolve "$CONFIG" "$STATE/$ID.meta" || true)
+else
+  SPAWN_TRACEPARENT=
+fi
+
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
 {
@@ -1902,6 +2615,7 @@ META_WINDOW=$T
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
+  # Default-off writes no traceparent= line (meta stays byte-identical).
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
@@ -1948,6 +2662,32 @@ LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
+if [ "$HARNESS" = opencode ]; then
+  # OpenCode 1.18.10 asks external_directory for the target's parent plus `/*`.
+  # Permit only the task's deliberate outside-worktree writes - its status file,
+  # its report directory, and the per-task temp root this spawn creates and
+  # exports as GOTMPDIR; all brief and report inputs have already been copied
+  # under the task worktree.
+  # Every spelling the crewmate can reach a granted directory by is listed, not
+  # just the physically resolved one: /tmp is a symlink to /private/tmp on
+  # darwin and GOTMPDIR is exported with the logical /tmp spelling, and a
+  # firstmate home reached through a symlink hands out a logical status path the
+  # resolved rule would not match. Duplicates collapse, so the common case where
+  # the two agree still emits one rule per directory.
+  opencode_rules=
+  while IFS= read -r opencode_dir; do
+    [ -n "$opencode_dir" ] || continue
+    opencode_rule=$(json_escape "${opencode_dir%/}/*")
+    opencode_rules=${opencode_rules:+$opencode_rules,}$(printf '"%s":"allow"' "$opencode_rule")
+  done < <(printf '%s\n' \
+    "$STATE" "$STATE_REAL" "$FM_HOME/state" "$STAGE_HOME_REAL/state" \
+    "$DATA/$ID" "$STAGE_OUTPUT_DIR_REAL" "$FM_HOME/data/$ID" "$STAGE_HOME_REAL/data/$ID" \
+    "$TASK_TMP" "$TASK_TMP_REAL" \
+    | awk 'NF { sub(/\/+$/, "", $0); if (!seen[$0]++) print }')
+  opencode_config=$(printf '{"permission":{"*":"allow","external_directory":{%s}}}' "$opencode_rules")
+  opencode_config_quoted=$(shell_quote "$opencode_config")
+  LAUNCH=${LAUNCH//__OPENCODE_CONFIG__/$opencode_config_quoted}
+fi
 # Crewmate panes are created by a long-lived tmux/herdr daemon that does not
 # inherit firstmate's current environment, so a bare `claude` in the pane falls
 # back to the default ~/.claude store even when firstmate itself runs under a
@@ -1961,12 +2701,35 @@ fi
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   sq_primary_home=$(shell_quote "$FM_HOME")
-  LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home $LAUNCH"
+  # Deliver the primary's EFFECTIVE trace-context decision as a normalized on/off
+  # literal (never the raw FM_TRACE_CONTEXT string) so a FM_TRACE_CONTEXT override
+  # on the primary reaches the secondmate's OWN workers, not just the copied
+  # config/trace-context file: otherwise off would not disable them and on would
+  # not enable them across the launch boundary (bin/fm-trace-context-lib.sh header).
+  # Reuse the single frozen decision from the carrier resolution above so the
+  # injected carrier and this on/off snapshot are guaranteed to agree.
+  LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home FM_TRACE_CONTEXT=$SPAWN_TRACE_EFFECTIVE $LAUNCH"
 fi
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
 spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+# Send through the exact channel that already ships GOTMPDIR, so every backend
+# and harness - ship, scout, and secondmate - gets it before launch. Skipped
+# entirely when trace context is off.
+if [ -n "$SPAWN_TRACEPARENT" ]; then
+  if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
+    if ! echo "traceparent=$SPAWN_TRACEPARENT" >> "$STATE/$ID.meta"; then
+      LAUNCH="unset TRACEPARENT; $LAUNCH"
+    fi
+  else
+    TRACE_SEND_STATUS=$?
+    if [ "$TRACE_SEND_STATUS" -eq 2 ]; then
+      echo "error: trace-context input could not be cleared for $W; refusing to append the launch command" >&2
+      exit 1
+    fi
+  fi
+fi
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
