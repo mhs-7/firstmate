@@ -947,6 +947,10 @@ if [ -n "${FM_FAKE_TMUX_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
 fi
 case "$*" in
+  # Real tmux expands EVERY placeholder in one format, so the composer reader's
+  # combined '#{cursor_y} #{pane_current_command}' must answer with both fields;
+  # it is matched before the single-field cases below.
+  *display-message*'#{cursor_y} #{pane_current_command}'*) printf '%s\n' '0 codex'; exit 0 ;;
   *display-message*'#{pane_current_command}'*) printf '%s\n' codex; exit 0 ;;
   *display-message*'#{pane_id}'*) printf '%s\n' '%1'; exit 0 ;;
   *display-message*'#{cursor_y}'*) printf '%s\n' 0; exit 0 ;;
@@ -2242,6 +2246,9 @@ SH
   cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 case "\$*" in
+  # Real tmux expands every placeholder in one format (see the combined
+  # composer read); answer the combined format before the single-field cases.
+  *display-message*'#{cursor_y} #{pane_current_command}'*) printf '%s' '0 zsh' ;;
   *display-message*'#{pane_current_command}'*) printf '%s' zsh ;;
   *display-message*'#{pane_id}'*) printf '%s' '%1' ;;
   *display-message*'#{cursor_y}'*) printf '%s' 0 ;;

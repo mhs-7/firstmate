@@ -134,6 +134,65 @@ SH
   pass "session-lock: ordinary script paths under a harness directory are not harness processes"
 }
 
+test_bun_interpreted_omp_session_is_identified() {
+  local dir fakebin got
+  dir="$TMP_ROOT/bun-omp"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  # omp installs as a `#!/usr/bin/env bun` script, so ps names the INTERPRETER:
+  # comm=bun, args='bun <path>/omp'. Neither the basename nor argv[0] says omp,
+  # and FM_HARNESS_RE's anchored ^omp$ cannot match the full args string, so the
+  # identity has to come from the script path's whole components. A bun process
+  # running an unrelated script must stay outside the harness identity.
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$pid:$field:${FM_TEST_BUN_SHAPE:-omp}" in
+  600:comm=:omp) printf '%s\n' bun ;;
+  600:args=:omp) printf '%s\n' 'bun /Users/u/.bun/bin/omp' ;;
+  600:comm=:unrelated) printf '%s\n' bun ;;
+  600:args=:unrelated) printf '%s\n' 'bun /Users/u/src/ompany/build.ts' ;;
+  600:comm=:glob) printf '%s\n' bun ;;
+  600:args=:glob) printf '%s\n' 'bun test --watch p* c*' ;;
+  600:ppid=:*) printf '%s\n' 1 ;;
+  *:comm=:*) printf '%s\n' bash ;;
+  *:args=:*) printf '%s\n' 'bash /repo/bin/fm-lock.sh' ;;
+  *:ppid=:*) printf '%s\n' 600 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  printf '600\n' > "$dir/state/.lock"
+
+  got=$(lib_eval "$fakebin" 'fm_harness_ancestry_pid') \
+    || fail "a bun-interpreted omp session was not found in the ancestry at all"
+  [ "$got" = 600 ] || fail "ancestry resolved '$got', expected the omp session pid 600"
+  lib_eval "$fakebin" 'fm_harness_pid_alive 600' \
+    || fail "a live bun-interpreted omp session was not recognized as a harness"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
+    || fail "the omp session holding the lock did not recognize itself as the owner"
+
+  if FM_TEST_BUN_SHAPE=unrelated lib_eval "$fakebin" 'fm_harness_ancestry_pid'; then
+    fail "a bun process running an unrelated script was treated as a harness"
+  fi
+
+  # An interpreter's argv is DATA, never a glob: a `bun test **/*.ts` ancestor
+  # must not have its arguments expanded against the caller's working directory,
+  # where a `pi/` or `claude/` entry would otherwise fabricate a harness match.
+  mkdir -p "$dir/globcwd/pi" "$dir/globcwd/claude"
+  if (cd "$dir/globcwd" && FM_TEST_BUN_SHAPE=glob lib_eval "$fakebin" 'fm_harness_ancestry_pid'); then
+    fail "an interpreter argv glob was expanded against the cwd and faked a harness match"
+  fi
+  pass "session-lock: a bun-interpreted omp session is identified from its script path"
+}
+
 test_harness_beyond_a_gap_never_owns_the_lock() {
   local dir fakebin got
   dir="$TMP_ROOT/gap"
@@ -356,6 +415,7 @@ test_e2e_daemon_parented_version_named_session_keeps_its_lock() {
 
 test_version_named_session_is_identified_on_both_platforms
 test_ordinary_paths_are_never_harness_processes
+test_bun_interpreted_omp_session_is_identified
 test_harness_beyond_a_gap_never_owns_the_lock
 test_competing_version_named_session_is_seen_as_live
 test_e2e_version_named_session_claims_the_home

@@ -83,7 +83,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|omp|pi|pi-signed|grok|kimi)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
@@ -125,6 +125,8 @@
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
 #                  written by this script; outside the worktree to avoid pi's trust gate)
+#     __OMPEXT__   absolute path to state/<task-id>.omp-ext.ts (omp turn-end + busy
+#                  extension, written by this script; outside the worktree like pi's)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
@@ -367,7 +369,7 @@ spawn_remote_secondmate() {
     harness=$("$FM_ROOT/bin/fm-harness.sh" secondmate)
   fi
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi) ;;
+    claude|codex|opencode|omp|pi|pi-signed|grok|kimi) ;;
     *)
       fm_lock_release "$registry_lock" || true
       fm_lock_release "$SPAWN_TASK_LOCK" || true
@@ -703,7 +705,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi)
+    ''|claude|codex|opencode|omp|pi|pi-signed|grok|kimi)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -753,6 +755,25 @@ launch_template() {
     # worktree and the task's external output directories are known, so this
     # firstmate-only launch rule never changes the captain's global config.
     opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT=__OPENCODE_CONFIG__ opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # omp (oh-my-pi, a Pi fork): a positional brief starts the TUI and a
+    # `-e __OMPEXT__` extension - kept OUTSIDE the worktree in state/, exactly
+    # like pi's - reports busy/idle (agent_start/agent_end) and the turn-end
+    # notification (turn_end), each verified on omp v17.2.10 (2026-08-06).
+    # omp's default tools.approvalMode is yolo (auto-approves read/write/exec),
+    # so crewmates run autonomously without a permission flag.
+    # Only a non-secondmate spawn writes that per-task extension (see the
+    # extension writer below), so a secondmate launch must NOT reference it:
+    # pointing `-e` at a path that is never created would start omp against a
+    # missing extension. A secondmate therefore launches without the extension
+    # and without a semantic busy source or turn-end touch - a known limit
+    # recorded in the harness-adapters skill (dated 2026-08-06).
+    omp)
+      if [ "$kind" = secondmate ]; then
+        printf '%s' 'omp __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      else
+        printf '%s' 'omp __MODELFLAG____EFFORTFLAG__-e __OMPEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      fi
+      ;;
     pi|pi-signed)
       if [ "$kind" = secondmate ]; then
         printf '%s%s' "$harness" ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -824,6 +845,13 @@ if [ "$HARNESS" = pi-signed ] && ! command -v pi-signed >/dev/null 2>&1; then
   echo "error: pi-signed executable not found on PATH; install the signed Pi wrapper or select a different verified harness" >&2
   exit 1
 fi
+# omp is a plain adapter, but a verified worker still needs the executable on
+# PATH to launch; fail closed before creating an endpoint rather than launching
+# a command that can only fail in the pane.
+if [ "$HARNESS" = omp ] && ! command -v omp >/dev/null 2>&1; then
+  echo "error: omp executable not found on PATH; install oh-my-pi or select a different verified harness" >&2
+  exit 1
+fi
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
 # harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
@@ -885,7 +913,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi)
+    claude|codex|opencode|omp|pi|pi-signed|grok|kimi)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -917,9 +945,11 @@ effort_flag_for_harness() {
         low|medium|high) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
-    pi|pi-signed)
-      # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
-      # its --thinking flag.
+    pi|pi-signed|omp)
+      # Pi 0.80.6 and omp v17.2.10 (verified 2026-08-06) accept the full shared
+      # effort vocabulary, including max, through their --thinking flags. omp's
+      # --thinking additionally accepts off/minimal/auto beyond Pi's set; the
+      # firstmate effort axis stays within the shared low..max range.
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
@@ -2364,7 +2394,7 @@ if [ "$KIND" != secondmate ]; then
       ;;
   esac
   case "$HARNESS" in
-    claude*|opencode*|pi|pi-signed)
+    claude*|opencode*|omp|pi|pi-signed)
       BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
         echo "error: failed to arm the busy-state contract for $ID" >&2
         exit 1
@@ -2485,6 +2515,45 @@ export default function (pi: any) {
   pi.on("agent_settled", (_event: any, ctx: any) => {
     if (ctx && typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
     return busyEvent("idle", "agent-settled");
+  });
+  pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
+}
+EOF
+      ;;
+    omp)
+      # omp (oh-my-pi) loads a Pi-shaped -e extension from an explicit path
+      # OUTSIDE the worktree without any project trust gate (verified live on
+      # omp v17.2.10, 2026-08-06). The event names differ from pi: omp has no
+      # `agent_settled` event. It emits `agent_end` with a `willContinue` flag:
+      # terminal (willContinue falsy) means the agent loop settled, while
+      # willContinue=true means auto-retry/compaction scheduled a continuation
+      # and must NOT be treated as idle. `turn_end` fires per inner turn and
+      # stays the watcher's wake NOTIFICATION touch. Lives in state/, cleaned
+      # by teardown.
+      cat > "$STATE/$ID.omp-ext.ts" <<EOF
+// Firstmate semantic busy-state events + turn-end notification; written by
+// fm-spawn under the contract owned by bin/fm-busy-lib.sh.
+// Semantic state: "agent_start" -> busy when an agent loop begins (once per
+// user prompt); "agent_end" -> idle only when the event is terminal (omp
+// fires agent_end with a willContinue flag set true when auto-retry,
+// auto-compaction, or a queued continuation keeps the run going, so those
+// must not land idle).
+// "turn_end" fires at every inner turn boundary (one LLM response plus its
+// tool calls) and stays a wake NOTIFICATION touch for the watcher, never
+// current-state truth.
+import { execFile } from "node:child_process";
+const busyEvent = (state: string, event: string) =>
+  new Promise<void>((resolve) => {
+    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
+      "apply", "$STATE_REAL", "$ID", state,
+      "--gen", "$BUSY_GEN", "--source", "omp-ext", "--event", event,
+    ], () => resolve());
+  });
+export default function (pi: any) {
+  pi.on("agent_start", () => busyEvent("busy", "agent-start"));
+  pi.on("agent_end", (event: any) => {
+    if (event && event.willContinue === true) return;
+    return busyEvent("idle", "agent-end");
   });
   pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
 }
@@ -2649,6 +2718,7 @@ META_WINDOW=$T
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
+sq_ompext=$(shell_quote "$STATE/$ID.omp-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
@@ -2659,6 +2729,7 @@ LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
+LAUNCH=${LAUNCH//__OMPEXT__/$sq_ompext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}

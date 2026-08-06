@@ -47,7 +47,16 @@ make_fake_tmux() {  # <dir>
 set -u
 case "${1:-}" in
   display-message)
-    for a in "$@"; do case "$a" in *cursor_y*) printf '%s\n' "${FM_FAKE_CY:-0}"; exit 0 ;; esac; done
+    # Expand every placeholder in the format, so a single-field format and the
+    # combined '#{cursor_y} #{pane_current_command}' both render like real tmux.
+    for a in "$@"; do
+      case "$a" in
+        *'#{'*)
+          out=${a//'#{cursor_y}'/${FM_FAKE_CY:-0}}
+          out=${out//'#{pane_current_command}'/${FM_FAKE_COMMAND:-fakepane}}
+          printf '%s\n' "$out"; exit 0 ;;
+      esac
+    done
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
     has_e=0
@@ -498,6 +507,110 @@ test_all_tmux_harness_composers_share_classification() {
   pass "fm_tmux_composer_state: all tmux harnesses share empty and pending classification"
 }
 
+# --- omp (oh-my-pi) 2-row π composer ----------------------------------------
+# omp (v17.2.10, verified 2026-08-06) draws a structurally unusual 2-row
+# composer footer box that the generic box finder cannot bound: a metadata TOP
+# row `╭── π <model> <status> ▶...╮` and a BOTTOM row `╰─ <editor content> ─╯`
+# where typed input renders. Classified by the bottom row alone, gated on a
+# preceding `π` row, and on the pane running a live omp TUI (not a dead shell
+# that left a stale frame behind).
+
+test_omp_composer_empty_and_pending() {
+  local dir fb capture out
+  dir="$TMP_ROOT/omp-composer"; mkdir -p "$dir"
+  fb=$(make_fake_tmux "$dir")
+  capture="$dir/styled.txt"
+  # Live omp TUI: foreground command is its launcher, not a shell. Empty bottom
+  # row -> empty; typed text on the bottom row -> pending.
+  printf '╭── π homelab/code created ▶─────────────────╮\n╰─ ─╯\n' > "$capture"
+  out=$(PATH="$fb:$PATH" FM_FAKE_COMMAND=omp FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+    fm_tmux_composer_state "fakepane")
+  [ "$out" = empty ] \
+    || fail "omp empty composer must read empty, got '$out'"
+  printf '╭── π homelab/code created ▶─────────────────╮\n╰─ run the tests ─╯\n' > "$capture"
+  out=$(PATH="$fb:$PATH" FM_FAKE_COMMAND=omp FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+    fm_tmux_composer_state "fakepane")
+  [ "$out" = pending ] \
+    || fail "omp composer with typed text must read pending, got '$out'"
+  pass "fm_tmux_composer_state: omp π composer reads empty when bare and pending when typed"
+}
+
+test_omp_stale_frame_after_exit_is_unknown() {
+  local dir fb capture out
+  dir="$TMP_ROOT/omp-dead"; mkdir -p "$dir"
+  fb=$(make_fake_tmux "$dir")
+  capture="$dir/styled.txt"
+  # omp leaves its last π composer frame on screen after exiting to a login
+  # shell; with the foreground command now a shell, that stale box must NOT read
+  # as an empty injection target - it reads unknown.
+  printf '╭── π homelab/code created ▶─────────────────╮\n╰─ ─╯\n' > "$capture"
+  out=$(PATH="$fb:$PATH" FM_FAKE_COMMAND=zsh FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+    fm_tmux_composer_state "fakepane")
+  [ "$out" = unknown ] \
+    || fail "omp stale π frame after exit must read unknown, got '$out'"
+  pass "fm_tmux_composer_state: omp dead-shell leftover frame reads unknown, never empty"
+}
+
+test_omp_composer_shape_requires_pi_glyph() {
+  local dir fb capture out
+  dir="$TMP_ROOT/omp-shape"; mkdir -p "$dir"
+  fb=$(make_fake_tmux "$dir")
+  capture="$dir/styled.txt"
+  # A `╰─...─╯` row whose preceding row carries no π glyph is NOT omp's composer
+  # (e.g. a welcome box bottom) and falls through to the generic scanner, which
+  # cannot bound it as a safe empty target.
+  printf 'welcome to the shell\n╰──────────────╯\n' > "$capture"
+  out=$(PATH="$fb:$PATH" FM_FAKE_COMMAND=omp FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+    fm_tmux_composer_state "fakepane")
+  [ "$out" = unknown ] \
+    || fail "a ╰─...─╯ bottom row without a π row must not classify as omp, got '$out'"
+  pass "fm_tmux_composer_state: omp shape ignores ╰─...─╯ rows not preceded by a π row"
+}
+
+test_omp_classifier_never_answers_for_a_non_omp_pane() {
+  local dir fb capture out
+  dir="$TMP_ROOT/omp-gate"; mkdir -p "$dir"
+  fb=$(make_fake_tmux "$dir")
+  capture="$dir/styled.txt"
+  # Another harness's agent output can render a bordered block right under a line
+  # that happens to carry a π (e.g. quoted omp/pi output). That must NEVER
+  # short-circuit the strict generic contract into a safe `empty` verdict: the
+  # omp classifier is gated on omp's own foreground command (bun/omp).
+  printf 'the π footer looks like this:\n╰─ ─╯\n' > "$capture"
+  for cmd in claude codex node python fakepane; do
+    out=$(PATH="$fb:$PATH" FM_FAKE_COMMAND="$cmd" FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+      fm_tmux_composer_state "fakepane")
+    [ "$out" != empty ] \
+      || fail "a π-preceded box on a '$cmd' pane must not classify as an empty omp composer"
+  done
+  # The same frame on a real omp pane (launched through bun) still classifies.
+  out=$(PATH="$fb:$PATH" FM_FAKE_COMMAND=bun FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+    fm_tmux_composer_state "fakepane")
+  [ "$out" = empty ] \
+    || fail "omp's bun foreground command must still classify its composer, got '$out'"
+  pass "fm_tmux_composer_state: the omp classifier answers only for panes running omp"
+}
+
+test_omp_composer_uses_the_bottom_footer_box() {
+  local dir fb capture out
+  dir="$TMP_ROOT/omp-footer"; mkdir -p "$dir"
+  fb=$(make_fake_tmux "$dir")
+  capture="$dir/styled.txt"
+  # Scrollback can hold an earlier π-preceded box. The LIVE composer is the last
+  # one on screen, so the footer decides - never an earlier frame.
+  printf '╭── π homelab/code created ▶───╮\n╰─ an earlier submitted prompt ─╯\nagent output\n╭── π homelab/code created ▶───╮\n╰─ ─╯\n' > "$capture"
+  out=$(PATH="$fb:$PATH" FM_FAKE_COMMAND=omp FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+    fm_tmux_composer_state "fakepane")
+  [ "$out" = empty ] \
+    || fail "the live empty omp footer must win over an earlier scrollback box, got '$out'"
+  printf '╭── π homelab/code created ▶───╮\n╰─ ─╯\nagent output\n╭── π homelab/code created ▶───╮\n╰─ typed but unsent ─╯\n' > "$capture"
+  out=$(PATH="$fb:$PATH" FM_FAKE_COMMAND=omp FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+    fm_tmux_composer_state "fakepane")
+  [ "$out" = pending ] \
+    || fail "a pending omp footer must win over an earlier empty box, got '$out'"
+  pass "fm_tmux_composer_state: the last π-preceded box (the live footer) decides"
+}
+
 test_unrecognized_state_defers_input_guard() {
   (
     # shellcheck disable=SC2329
@@ -616,6 +729,11 @@ test_clipped_bordered_box_is_unknown
 test_asymmetric_composer_edges_are_unknown
 test_mismatched_box_families_are_unknown
 test_misaligned_box_is_unknown
+test_omp_composer_empty_and_pending
+test_omp_stale_frame_after_exit_is_unknown
+test_omp_composer_shape_requires_pi_glyph
+test_omp_classifier_never_answers_for_a_non_omp_pane
+test_omp_composer_uses_the_bottom_footer_box
 test_unproved_empty_geometry_is_unknown
 test_differing_widths_use_asymmetric_verdicts
 test_wide_composer_text_is_pending

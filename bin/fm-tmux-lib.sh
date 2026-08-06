@@ -87,6 +87,12 @@ FM_TMUX_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]
 FM_TMUX_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_TMUX_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_TMUX_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
+# omp (v17.2.10, verified 2026-08-06): the TUI shows a running-turn status line
+# ending in the `⟦esc⟧` interrupt hint (e.g. "Runs sleep 30 ⟦esc⟧"); that
+# bracket-double-escaped hint is the stable busy signature. omp's semantic
+# busy-state extension (agent_start/agent_end) is the authoritative source; this
+# regex only backs the legacy fm_pane_is_busy fallback.
+FM_TMUX_OMP_BUSY_REGEX_DEFAULT='⟦esc⟧'
 FM_TMUX_GROK_BUSY_REGEX_DEFAULT='Ctrl\+c:cancel'
 FM_TMUX_KIMI_BUSY_REGEX_DEFAULT='^[[:space:]]*(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘)[[:space:]]+·[[:space:]]+'
 
@@ -101,6 +107,7 @@ fm_busy_lines_match() {  # [harness]
       codex) regex=$FM_TMUX_CODEX_BUSY_REGEX_DEFAULT ;;
       opencode) regex=$FM_TMUX_OPENCODE_BUSY_REGEX_DEFAULT ;;
       pi|pi-signed) regex=$FM_TMUX_PI_BUSY_REGEX_DEFAULT ;;
+      omp) regex=$FM_TMUX_OMP_BUSY_REGEX_DEFAULT ;;
       grok) regex=$FM_TMUX_GROK_BUSY_REGEX_DEFAULT ;;
       kimi) regex=$FM_TMUX_KIMI_BUSY_REGEX_DEFAULT ;;
       '') regex=$FM_TMUX_BUSY_REGEX_DEFAULT ;;
@@ -302,6 +309,70 @@ EOF
   return 1
 }
 
+# fm_tmux_omp_composer_state: classify omp's (oh-my-pi) composer, which is a
+# structurally unusual 2-row footer box that the generic box finder cannot
+# bound (verified live on omp v17.2.10, 2026-08-06). The TOP row is
+# `╭── π <model path> <status> ▶ ...╮` (metadata plus a decorative `▶`), and the
+# BOTTOM row is where typed input actually renders: `╰─ <editor content> ─╯`.
+# There are no `│` content rows between them, so fm_tmux_find_composer_box
+# finds no valid box and the generic fallback would only ever say `unknown`.
+# Classify by the bottom row alone: `╰─<content>─╯`, where content is empty
+# (empty composer) or real typed text (pending). The `π` glyph on the
+# immediately preceding row proves this is omp's composer, not another
+# `╰─...─╯` row (e.g. a welcome box bottom). After omp exits the pane shows a
+# plain shell prompt with no `π` box, which stays `unknown`, so a dead shell is
+# never a safe `empty` injection target.
+#
+# This classifier is deliberately NARROWER than the generic reader and must
+# never be able to answer for a pane that is not running omp: another harness's
+# agent output can legitimately render a bordered block under a line carrying a
+# `π`, and letting that short-circuit the strict generic contract (cursor row,
+# matched border families, width proof) would license injection on a pane whose
+# composer was never proven empty. The pane's foreground command is therefore a
+# POSITIVE gate: only omp's own launcher (`bun`, or `omp` directly) is
+# classified here; every other command - including a login shell left behind by
+# an exited omp - reads unknown and falls through to the generic reader.
+# Within a real omp pane the LAST π-preceded `╰─...─╯` row wins, because the
+# live composer is the footer while any earlier match is scrollback.
+fm_tmux_omp_composer_state() {  # <target> <pane-current-command> -> empty|pending|unknown
+  local target=$1 comm=${2-} pane plain line prev content last=
+  comm=${comm#-}
+  comm=${comm##*/}
+  case "$comm" in
+    bun|omp) ;;
+    *) printf 'unknown'; return 0 ;;
+  esac
+  pane=$(tmux capture-pane -e -p -t "$target" 2>/dev/null) || { printf 'unknown'; return 0; }
+  plain=$(printf '%s\n' "$pane" | fm_composer_strip_ansi)
+  prev=
+  while IFS= read -r line; do
+    line="${line%"${line##*[![:space:]]}"}"
+    case "$line" in
+      '╰─'*'─╯')
+        if printf '%s' "$prev" | grep -q 'π'; then
+          content=${line#'╰─'}
+          content=${content%'─╯'}
+          content="${content#"${content%%[![:space:]]*}"}"
+          content="${content%"${content##*[![:space:]]}"}"
+          if [ -n "$content" ]; then
+            last=pending
+          else
+            last=empty
+          fi
+        fi
+        ;;
+    esac
+    prev=$line
+  done <<EOF
+$plain
+EOF
+  if [ -n "$last" ]; then
+    printf '%s' "$last"
+  else
+    printf 'unknown'
+  fi
+}
+
 # fm_tmux_composer_state classification contract:
 # A row is structural only when its first or last non-whitespace character is a
 # composer edge. A complete box has matching border families and bounded top and
@@ -316,7 +387,24 @@ EOF
 fm_tmux_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
   local target=$1 cy raw pane plain box box_status top bottom geometry_ambiguous
   local row row_raw state unknown_seen=0
-  cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
+  # The cursor row and the pane's foreground command are read in ONE
+  # display-message: the omp classifier needs the command and the generic reader
+  # needs the cursor row, so neither costs an extra round trip inside the submit
+  # retry loop.
+  local omp_state pane_meta comm
+  pane_meta=$(tmux display-message -p -t "$target" '#{cursor_y} #{pane_current_command}' 2>/dev/null) \
+    || { printf 'unknown'; return 0; }
+  cy=${pane_meta%% *}
+  comm=${pane_meta#"$cy"}
+  comm=${comm# }
+  # omp's 2-row footer composer needs its own classifier because the generic box
+  # finder cannot bound its shape. It answers only for a pane proven to be
+  # running omp and stays unknown for every other pane, so the strict generic
+  # contract below still owns every non-omp classification.
+  omp_state=$(fm_tmux_omp_composer_state "$target" "$comm")
+  case "$omp_state" in
+    empty|pending) printf '%s' "$omp_state"; return 0 ;;
+  esac
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
   pane=$(tmux capture-pane -e -p -t "$target" -S 0 -E - 2>/dev/null) || { printf 'unknown'; return 0; }
   plain=$(printf '%s\n' "$pane" | fm_composer_strip_ansi)

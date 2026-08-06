@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, and kimi.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, omp, grok, and kimi.
 user-invocable: false
 metadata:
   internal: true
@@ -125,6 +125,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Verified on codex-cli 0.142.1. The installed binary schema contains `model_reasoning_effort`, the active config uses it, and the bundled model catalog advertises only low/medium/high/xhigh. `max` is omitted. |
 | grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Verified on grok 0.2.99 (2026-07-13). `--effort` is an alias, but firstmate's profile axis is reasoning effort. As of 0.2.99 the ceiling is `high`; both `xhigh` and `max` are rejected with `use one of: high, medium, low`, so firstmate omits them. |
 | pi / pi-signed | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-27 on Pi and pi-signed 0.82.0. Both expose the same accepted thinking levels and completed the same model-qualified max-thinking smoke. |
+| omp | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-08-06 on omp 17.2.10. Accepts the full shared effort vocabulary plus `off`/`minimal`/`auto`; firstmate stays within the shared low..max range. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
 | kimi | `--model <model>` | none | Verified 2026-07-25 on Kimi Code CLI 0.29.1. |
 
@@ -142,6 +143,7 @@ Use the discovery surface in the current authenticated environment because suppo
 | codex | Open the current interactive session's `/model` picker. |
 | opencode | Run `opencode models [provider]`, which lists available provider/model identifiers. |
 | pi / pi-signed | Run the selected executable as `<executable> --list-models [search]`; Pi's installed `docs/models.md` owns how built-in, extension-registered, and custom provider/model entries reach that list. |
+| omp | Run `omp models`, which lists models from the active profile's provider config plus registry-built-in entries. |
 | grok | Run `grok models`, which lists the models available to the current Grok installation and account. |
 | kimi | Run `kimi provider list --json`, which lists the current provider and model configuration. |
 
@@ -161,6 +163,7 @@ Natural language is acceptable if uncertain.
 - codex: `$<skill>`, for example `$no-mistakes`; `/<skill>` is claude-only and codex rejects it as "Unrecognized command".
 - opencode: no separate verified skill invocation beyond normal slash-command behavior; use natural language if the exact skill command is uncertain.
 - pi and pi-signed: no separate verified skill invocation beyond normal command behavior; use natural language if the exact skill command is uncertain.
+- omp: no separate verified skill invocation beyond normal command behavior; use natural language if the exact skill command is uncertain.
 - grok: `/<skill>`, for example `/no-mistakes` (same form as claude). Verified end to end: grok discovers the user-level `no-mistakes` skill, `/no-mistakes` invokes it, and grok drives a real `no-mistakes axi run`. Like codex's `$`/`/` popups, typing `/<skill>` opens grok's slash-autocomplete, so a too-fast Enter selects the popup entry instead of sending, and for an argument-taking command (like `/no-mistakes`'s optional task-first argument) that first Enter only expands the popup selection into an argument-hint placeholder rather than submitting - a genuine second Enter is required (see the grok section below for the 2026-07-03 incident and fix). `fm_tmux_submit_core`'s retried Enter (used by `fm-send` on the tmux backend) handles this through the structural composer reader; the herdr backend needed a dedicated fix (`fm_backend_herdr_composer_state`, docs/herdr-backend.md) because its prior delta-based verification false-positived on that same popup-close content change.
 - kimi: `/<skill>`, for example `/no-mistakes`.
 
@@ -300,6 +303,41 @@ Pi's primary watcher protocol also requires the tracked `.pi/extensions/fm-prima
 The model arms through `fm_watch_arm_pi`, never a foreground bash arm; the watcher tool result and clean-exit fallback are owned by `docs/supervision-protocols/pi.md`.
 `bin/fm-session-start.sh` reports when the live Pi-family session has not loaded both the turn-end guard and watcher extensions, and points at the selected executable after project trust as the fix, with `-e` as a trust-free fallback.
 When a secondmate is launched on Pi or pi-signed, `fm-spawn.sh --secondmate` launches the selected executable with both `-e .pi/extensions/fm-primary-turnend-guard.ts` and `-e .pi/extensions/fm-primary-pi-watch.ts`, both already present in the secondmate home's git worktree.
+
+## omp (VERIFIED 2026-08-06, omp 17.2.10)
+
+`omp` (oh-my-pi, `https://github.com/can1357/oh-my-pi`) is a Pi fork: it launches the TUI with a positional prompt, loads a Pi-shaped TypeScript `-e` extension, and shares Pi's `--model` and `--thinking` effort flags.
+The extension mechanism is byte-compatible in shape with Pi (`export default function (pi: ExtensionAPI) { ... }`), but the event names differ: omp emits `agent_end` with a `willContinue` flag instead of Pi's `agent_settled`, and has no `agent_settled` event at all.
+Firstmate's per-task extension therefore listens for `agent_start` (busy) and `agent_end` that is terminal (idle), and keeps `turn_end` as the watcher's wake notification.
+
+| Fact | Value |
+|---|---|
+| Busy state | The task extension `agent_start` (busy) and a terminal `agent_end` (idle; skipped while `event.willContinue === true`, which flags auto-retry, auto-compaction, and queued continuations). Verified live print + interactive on omp v17.2.10, including the single-Escape interrupt path (agent_end fires terminal after `[Command cancelled]`). |
+| Exit command | `/quit` or `/exit` both close the TUI cleanly (prints `Resume this session with omp --resume ...`); `Ctrl+D` is the keybinding for `app.exit` and also exits, saving the draft. |
+| Interrupt | single `Escape` (`app.interrupt`); verified to cancel a running `sleep 30` with `[Command cancelled]`. |
+| Approval | omp HAS an approval system (unlike pi) whose default `tools.approvalMode` is `yolo`, auto-approving read, write, and exec tools, so firstmate launches without a permission flag. `--auto-approve` and `--approval-mode` also exist for explicit control. |
+| Env marker | omp sets both `OMPCODE=1` and `CLAUDECODE=1` for its bash-tool children. `bin/fm-harness.sh` checks `OMPCODE=1` before `CLAUDECODE=1`, because omp's child would otherwise be misidentified as claude. |
+| Resume | `omp --resume <session-id>` (id printed on exit) or `omp -c` / `--continue`; `omp -r` / `--resume` with the ID restores an earlier session. |
+
+`fm-spawn` writes the per-task extension to `state/<id>.omp-ext.ts`, outside the worktree, passes it with `-e`, and teardown removes it, exactly like pi's `state/<id>.pi-ext.ts`.
+An explicit `-e` path loads without any project trust dialog (verified live).
+omp carries no launch-time selection marker env var: detection is `OMPCODE=1` (checked before `CLAUDECODE=1`) plus the `bun`/`omp` ancestry match, so nothing needs a `FM_PI_HARNESS`-style prefix.
+Keep the brief as one positional argument, matching pi.
+
+**Known limit (dated 2026-08-06): an omp SECONDMATE has no turn-end or busy-state signal.**
+The per-task extension is written only for ship/scout spawns, so `fm-spawn --secondmate` launches omp WITHOUT `-e` rather than pointing it at a file that is never created.
+An omp secondmate therefore reports no semantic busy state and touches no turn-end marker, and falls back to stale-detection alone.
+Unlike pi - which has two in-home `.pi/extensions/` files a secondmate can load - omp has no equivalent in-home extension yet, so closing this limit means writing a secondmate-scoped extension (and arming the busy contract for that path) as a separate verified change.
+
+Quirks:
+The first-run setup wizard (a 4-step provider/theme walkthrough, `Setup step 1 of 4 ...`) appears whenever the actor's profile `~/.omp`-style home is uninitialized, even when the main `~/.omp` is already set up, so a fresh profile (or fresh machine) shows the wizard and must be skipped through Escape before the TUI is usable.
+The model-role system (`--smol` / `--slow` / `--plan` role models, cycled with `Ctrl+P`) is omp-native and independent of the adapter's single `--model`; `--smol`/`--slow`/`--plan` override the roles, and the active lane's model appears in the composer `π` footer.
+The `π`-glyph footer composer is a 2-row box: its top row is `╭── π <model path> <status> ▶ ...╮` and typed input renders on the bottom `╰─ <editor content> ─╯` row.
+`fm_tmux_omp_composer_state` classifies that bottom row empty/pending only on a pane whose foreground command is omp's own launcher (`bun` or `omp`), and only from the LAST `π`-preceded bottom row (the live footer, not scrollback).
+That positive gate matters twice: omp leaves its last composer frame visible after exiting to a login shell, so a stale frame must never read as a safe empty injection target, and another harness's output can render a bordered block under a `π` line, which must never short-circuit the strict generic composer contract.
+The tmux liveness probe (`fm_backend_tmux_agent_state`) reports omp panes as `ambiguous` rather than `alive`, because omp runs under a `bun` foreground command that the command-name probe cannot attribute; this is safe (never licenses a duplicate relaunch) and the task extension is authoritative for worker state.
+
+How far omp's Pi compatibility reaches for a third-party pi.dev registry package (which firstmate neither wires nor dispatches on) is recorded in `docs/verification/harness-adapters.md`.
 
 ## grok (VERIFIED 2026-06-29, grok 0.2.73; slash-submit re-verified 2026-07-03 on 0.2.82; reasoning-effort ceiling re-verified 2026-07-13 on 0.2.99; exit paths re-verified 2026-07-19 on grok 0.2.103)
 
