@@ -57,6 +57,9 @@ case "\${1:-}" in
   display-message)
     case "\$*" in
       *'#{pane_current_path}'*) cut -d'|' -f2- "\$state" ;;
+      # Real tmux expands every placeholder in one format, so the composer
+      # reader's combined format answers with both fields.
+      *'#{cursor_y} #{pane_current_command}'*) printf '0 codex\n' ;;
       *'#{pane_current_command}'*) printf 'codex\n' ;;
       *'#{cursor_y}'*) printf '0\n' ;;
       *'#S'*) printf 'firstmate\n' ;;
