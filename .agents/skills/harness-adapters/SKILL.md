@@ -337,10 +337,7 @@ The `π`-glyph footer composer is a 2-row box: its top row is `╭── π <mod
 That positive gate matters twice: omp leaves its last composer frame visible after exiting to a login shell, so a stale frame must never read as a safe empty injection target, and another harness's output can render a bordered block under a `π` line, which must never short-circuit the strict generic composer contract.
 The tmux liveness probe (`fm_backend_tmux_agent_state`) reports omp panes as `ambiguous` rather than `alive`, because omp runs under a `bun` foreground command that the command-name probe cannot attribute; this is safe (never licenses a duplicate relaunch) and the task extension is authoritative for worker state.
 
-**Registry/Pi-extension compatibility fact (verified 2026-08-06, omp v17.2.10):**
-`@narumitw/pi-goal` 0.49.5 installs via `omp plugin install @narumitw/pi-goal` (an npm spec) into the profile's `plugins/node_modules/`, declares its extension through the `pi.extensions: ['./src/index.ts']` manifest field, and loads/executes in omp without import or parse errors - the `@earendil-works/pi-coding-agent` scope is shimmed to omp's ExtensionAPI.
-Its `/goal` command does not actually register, because omp has its own built-in `goal` command and logs `Extension command 'goal' ... conflicts with built-in commands. Skipping.`
-This is a compatibility fact only: firstmate neither wires nor dispatches on any registry extension, and a pi.dev registry package can be shadowed by an omp built-in of the same command name.
+How far omp's Pi compatibility reaches for a third-party pi.dev registry package (which firstmate neither wires nor dispatches on) is recorded in `docs/verification/harness-adapters.md`.
 
 ## grok (VERIFIED 2026-06-29, grok 0.2.73; slash-submit re-verified 2026-07-03 on 0.2.82; reasoning-effort ceiling re-verified 2026-07-13 on 0.2.99; exit paths re-verified 2026-07-19 on grok 0.2.103)
 
