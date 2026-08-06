@@ -334,11 +334,8 @@ EOF
 # an exited omp - reads unknown and falls through to the generic reader.
 # Within a real omp pane the LAST π-preceded `╰─...─╯` row wins, because the
 # live composer is the footer while any earlier match is scrollback.
-fm_tmux_omp_composer_state() {  # <target> [pane-current-command] -> empty|pending|unknown
+fm_tmux_omp_composer_state() {  # <target> <pane-current-command> -> empty|pending|unknown
   local target=$1 comm=${2-} pane plain line prev content last=
-  if [ "$#" -lt 2 ]; then
-    comm=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null)
-  fi
   comm=${comm#-}
   comm=${comm##*/}
   case "$comm" in
@@ -390,16 +387,24 @@ EOF
 fm_tmux_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
   local target=$1 cy raw pane plain box box_status top bottom geometry_ambiguous
   local row row_raw state unknown_seen=0
+  # The cursor row and the pane's foreground command are read in ONE
+  # display-message: the omp classifier needs the command and the generic reader
+  # needs the cursor row, so neither costs an extra round trip inside the submit
+  # retry loop.
+  local omp_state pane_meta comm
+  pane_meta=$(tmux display-message -p -t "$target" '#{cursor_y} #{pane_current_command}' 2>/dev/null) \
+    || { printf 'unknown'; return 0; }
+  cy=${pane_meta%% *}
+  comm=${pane_meta#"$cy"}
+  comm=${comm# }
   # omp's 2-row footer composer needs its own classifier because the generic box
   # finder cannot bound its shape. It answers only for a pane proven to be
   # running omp and stays unknown for every other pane, so the strict generic
   # contract below still owns every non-omp classification.
-  local omp_state
-  omp_state=$(fm_tmux_omp_composer_state "$target")
+  omp_state=$(fm_tmux_omp_composer_state "$target" "$comm")
   case "$omp_state" in
     empty|pending) printf '%s' "$omp_state"; return 0 ;;
   esac
-  cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
   pane=$(tmux capture-pane -e -p -t "$target" -S 0 -E - 2>/dev/null) || { printf 'unknown'; return 0; }
   plain=$(printf '%s\n' "$pane" | fm_composer_strip_ansi)

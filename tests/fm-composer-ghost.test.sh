@@ -47,10 +47,14 @@ make_fake_tmux() {  # <dir>
 set -u
 case "${1:-}" in
   display-message)
+    # Expand every placeholder in the format, so a single-field format and the
+    # combined '#{cursor_y} #{pane_current_command}' both render like real tmux.
     for a in "$@"; do
       case "$a" in
-        *cursor_y*) printf '%s\n' "${FM_FAKE_CY:-0}"; exit 0 ;;
-        *pane_current_command*) printf '%s\n' "${FM_FAKE_COMMAND:-fakepane}"; exit 0 ;;
+        *'#{'*)
+          out=${a//'#{cursor_y}'/${FM_FAKE_CY:-0}}
+          out=${out//'#{pane_current_command}'/${FM_FAKE_COMMAND:-fakepane}}
+          printf '%s\n' "$out"; exit 0 ;;
       esac
     done
     printf 'fakepane\n'; exit 0 ;;

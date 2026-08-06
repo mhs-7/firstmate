@@ -55,7 +55,7 @@ fm_harness_path_name() {  # <path>
 #      as a path with the same whole-component rule as fm_harness_path_name.
 FM_HARNESS_IS_CLAUDE=0
 fm_harness_process_matches() {  # <comm> <args>
-  local comm=$1 args=$2 base argv0 name arg
+  local comm=$1 args=$2 base argv0 name arg rest
   FM_HARNESS_IS_CLAUDE=0
   base=$(basename -- "$comm")
   if printf '%s' "$base" | grep -qE "$FM_HARNESS_RE"; then
@@ -74,7 +74,11 @@ fm_harness_process_matches() {  # <comm> <args>
         case "$args" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
         return 0
       fi
-      for arg in $args; do
+      rest=$args
+      while [ -n "$rest" ]; do
+        arg=${rest%% *}
+        if [ "$arg" = "$rest" ]; then rest=; else rest=${rest#* }; fi
+        [ -n "$arg" ] || continue
         if name=$(fm_harness_path_name "$arg"); then
           case "$name" in claude) FM_HARNESS_IS_CLAUDE=1 ;; esac
           return 0
