@@ -759,11 +759,21 @@ launch_template() {
     # `-e __OMPEXT__` extension - kept OUTSIDE the worktree in state/, exactly
     # like pi's - reports busy/idle (agent_start/agent_end) and the turn-end
     # notification (turn_end), each verified on omp v17.2.10 (2026-08-06).
-    # The extension serves every kind identically, so there is no pi-style
-    # secondmate specialization. omp's default tools.approvalMode is yolo
-    # (auto-approves read/write/exec), so crewmates run autonomously without a
-    # permission flag.
-    omp) printf '%s' 'omp __MODELFLAG____EFFORTFLAG__-e __OMPEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # omp's default tools.approvalMode is yolo (auto-approves read/write/exec),
+    # so crewmates run autonomously without a permission flag.
+    # Only a non-secondmate spawn writes that per-task extension (see the
+    # extension writer below), so a secondmate launch must NOT reference it:
+    # pointing `-e` at a path that is never created would start omp against a
+    # missing extension. A secondmate therefore launches without the extension
+    # and without a semantic busy source or turn-end touch - a known limit
+    # recorded in the harness-adapters skill (dated 2026-08-06).
+    omp)
+      if [ "$kind" = secondmate ]; then
+        printf '%s' 'omp __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      else
+        printf '%s' 'omp __MODELFLAG____EFFORTFLAG__-e __OMPEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      fi
+      ;;
     pi|pi-signed)
       if [ "$kind" = secondmate ]; then
         printf '%s%s' "$harness" ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -826,7 +836,6 @@ esac
 
 case "$HARNESS" in
   pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
-  omp) LAUNCH="FM_OMP_HARNESS=omp $LAUNCH" ;;
 esac
 
 # pi-signed is an explicitly selected executable identity, not an alias that may

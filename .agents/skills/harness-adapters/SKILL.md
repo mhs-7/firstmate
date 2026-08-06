@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, and kimi.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, omp, grok, and kimi.
 user-invocable: false
 metadata:
   internal: true
@@ -319,16 +319,22 @@ Firstmate's per-task extension therefore listens for `agent_start` (busy) and `a
 | Env marker | omp sets both `OMPCODE=1` and `CLAUDECODE=1` for its bash-tool children. `bin/fm-harness.sh` checks `OMPCODE=1` before `CLAUDECODE=1`, because omp's child would otherwise be misidentified as claude. |
 | Resume | `omp --resume <session-id>` (id printed on exit) or `omp -c` / `--continue`; `omp -r` / `--resume` with the ID restores an earlier session. |
 
-`fm-spawn` writes the per-task extension to `state/<id>.omp-ext.ts`, outside the worktree, and passes it with `-e`, exactly like pi's `state/<id>.pi-ext.ts`.
-An explicit `-e` path loads without any project trust dialog (verified live), so the earlier `FM_OMP_HARNESS=omp` launch prefix is the durable selection marker, mirroring `FM_PI_HARNESS=pi-signed`.
-The omp extension serves ship, scout, and secondmate launches identically, so there is no pi-style secondmate specialization.
+`fm-spawn` writes the per-task extension to `state/<id>.omp-ext.ts`, outside the worktree, passes it with `-e`, and teardown removes it, exactly like pi's `state/<id>.pi-ext.ts`.
+An explicit `-e` path loads without any project trust dialog (verified live).
+omp carries no launch-time selection marker env var: detection is `OMPCODE=1` (checked before `CLAUDECODE=1`) plus the `bun`/`omp` ancestry match, so nothing needs a `FM_PI_HARNESS`-style prefix.
 Keep the brief as one positional argument, matching pi.
+
+**Known limit (dated 2026-08-06): an omp SECONDMATE has no turn-end or busy-state signal.**
+The per-task extension is written only for ship/scout spawns, so `fm-spawn --secondmate` launches omp WITHOUT `-e` rather than pointing it at a file that is never created.
+An omp secondmate therefore reports no semantic busy state and touches no turn-end marker, and falls back to stale-detection alone.
+Unlike pi - which has two in-home `.pi/extensions/` files a secondmate can load - omp has no equivalent in-home extension yet, so closing this limit means writing a secondmate-scoped extension (and arming the busy contract for that path) as a separate verified change.
 
 Quirks:
 The first-run setup wizard (a 4-step provider/theme walkthrough, `Setup step 1 of 4 ...`) appears whenever the actor's profile `~/.omp`-style home is uninitialized, even when the main `~/.omp` is already set up, so a fresh profile (or fresh machine) shows the wizard and must be skipped through Escape before the TUI is usable.
 The model-role system (`--smol` / `--slow` / `--plan` role models, cycled with `Ctrl+P`) is omp-native and independent of the adapter's single `--model`; `--smol`/`--slow`/`--plan` override the roles, and the active lane's model appears in the composer `π` footer.
 The `π`-glyph footer composer is a 2-row box: its top row is `╭── π <model path> <status> ▶ ...╮` and typed input renders on the bottom `╰─ <editor content> ─╯` row.
-`fm_tmux_omp_composer_state` classifies that bottom row empty/pending only while omp is the live foreground command, because omp leaves its last composer frame visible after exiting to a login shell and a stale frame must never read as a safe empty injection target.
+`fm_tmux_omp_composer_state` classifies that bottom row empty/pending only on a pane whose foreground command is omp's own launcher (`bun` or `omp`), and only from the LAST `π`-preceded bottom row (the live footer, not scrollback).
+That positive gate matters twice: omp leaves its last composer frame visible after exiting to a login shell, so a stale frame must never read as a safe empty injection target, and another harness's output can render a bordered block under a `π` line, which must never short-circuit the strict generic composer contract.
 The tmux liveness probe (`fm_backend_tmux_agent_state`) reports omp panes as `ambiguous` rather than `alive`, because omp runs under a `bun` foreground command that the command-name probe cannot attribute; this is safe (never licenses a duplicate relaunch) and the task extension is authoritative for worker state.
 
 **Registry/Pi-extension compatibility fact (verified 2026-08-06, omp v17.2.10):**
