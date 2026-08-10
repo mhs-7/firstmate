@@ -919,22 +919,115 @@ model_flag_for_harness() {
   esac
 }
 
-effort_flag_for_harness() {
-  local harness=$1 effort=$2
+# The standing captain preference for codex reasoning depth. Codex is the one
+# adapter where the depth ceiling is not a property of the harness: gpt-5.6-luna
+# implementation workers run at max, and every other codex spawn that did not
+# name its own model stays at the reviewer level, so an unnamed spawn inheriting
+# the local codex default never burns max quota on a review-shaped session.
+# A spawn that names its model is the captain speaking per task and is not capped.
+CODEX_IMPLICIT_MAX_MODEL=gpt-5.6-luna
+CODEX_IMPLICIT_MAX_CEILING=medium
+
+# Seconds any codex profile query may take before the spawn stops waiting on it.
+# `codex doctor` is a full health report whose only field this file reads costs
+# nothing, but which also runs live reachability and update probes, and `codex
+# debug models` refreshes its catalog against a server etag. Neither is allowed
+# to stall an interactive launch behind a network round trip, so both run bounded
+# and every timeout falls through to the same fail-closed answer as a refusal.
+FM_CODEX_PROFILE_TIMEOUT=${FM_CODEX_PROFILE_TIMEOUT:-10}
+case "$FM_CODEX_PROFILE_TIMEOUT" in ''|*[!0-9]*|0) FM_CODEX_PROFILE_TIMEOUT=10 ;; esac
+
+codex_bounded() {  # <command...>
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$FM_CODEX_PROFILE_TIMEOUT" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$FM_CODEX_PROFILE_TIMEOUT" "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$FM_CODEX_PROFILE_TIMEOUT" "$@"
+  else
+    return 124
+  fi
+}
+
+# The model codex will actually run: the pinned model when the spawn names one,
+# otherwise the model codex itself resolves from its own config precedence.
+# `codex doctor --json` is codex's own resolver, so this follows CODEX_HOME and
+# profile settings instead of re-implementing them. Returns non-zero when the
+# identity cannot be established.
+codex_effective_model() {
+  local model=$1 resolved
+  if [ -n "$model" ] && [ "$model" != default ]; then
+    printf '%s\n' "$model"
+    return 0
+  fi
+  command -v codex >/dev/null 2>&1 || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  resolved=$(codex_bounded codex doctor --json 2>/dev/null </dev/null \
+    | jq -r '.checks["config.load"].details.model // empty' 2>/dev/null) || return 1
+  [ -n "$resolved" ] || return 1
+  printf '%s\n' "$resolved"
+}
+
+# codex advertises reasoning levels per model rather than per harness. As of
+# codex-cli 0.147.0 every catalog model accepts low|medium|high|xhigh, but only
+# the gpt-5.6 family accepts max; pinning max on gpt-5.5 or older fails the whole
+# session with HTTP 400 unsupported_value on every turn. Ask codex's own catalog
+# instead of keeping a hand-maintained capability table, and treat anything short
+# of a definite yes - no codex, no jq, unresolvable model, unlisted slug - as no.
+codex_model_supports_effort() {
+  local model=$1 effort=$2
+  [ -n "$model" ] && [ "$model" != default ] || return 1
+  command -v codex >/dev/null 2>&1 || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  codex_bounded codex debug models 2>/dev/null </dev/null | jq -e --arg m "$model" --arg e "$effort" '
+    (.models // [])
+    | any(.slug == $m and ((.supported_reasoning_levels // []) | any(.effort == $e)))
+  ' >/dev/null 2>&1
+}
+
+# The codex reasoning effort that will actually launch for a requested one.
+# Levels up to xhigh are accepted by every catalog model and pass through
+# unchanged. max is both a capability question (does this model advertise it)
+# and a policy question (is this spawn one the captain runs at max).
+codex_effective_effort() {
+  local effort=$1 model=$2 resolved
+  case "$effort" in
+    low|medium|high|xhigh)
+      printf '%s\n' "$effort"
+      return 0
+      ;;
+    max) ;;
+    *) return 0 ;;
+  esac
+  if [ -n "$model" ] && [ "$model" != default ]; then
+    if codex_model_supports_effort "$model" max; then
+      printf 'max\n'
+    fi
+    return 0
+  fi
+  if resolved=$(codex_effective_model ""); then
+    if [ "$resolved" = "$CODEX_IMPLICIT_MAX_MODEL" ] && codex_model_supports_effort "$resolved" max; then
+      printf 'max\n'
+      return 0
+    fi
+  fi
+  printf '%s\n' "$CODEX_IMPLICIT_MAX_CEILING"
+}
+
+# The effort a harness will actually launch with, which is the single value both
+# the launch flag and the requested-versus-launched comparison are built from.
+# Empty means the requested effort does not reach the launch command at all.
+effective_effort_for_harness() {
+  local harness=$1 effort=$2 model=$3
   [ -n "$effort" ] && [ "$effort" != default ] || return 0
   case "$harness" in
     claude)
       case "$effort" in
-        low|medium|high|xhigh|max) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
+        low|medium|high|xhigh|max) printf '%s\n' "$effort" ;;
       esac
       ;;
     codex)
-      # The installed codex config schema uses model_reasoning_effort, and the
-      # bundled model catalog advertises low|medium|high|xhigh. Omit max rather
-      # than passing an unsupported value.
-      case "$effort" in
-        low|medium|high|xhigh) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
-      esac
+      codex_effective_effort "$effort" "$model"
       ;;
     grok)
       # grok exposes both --effort and --reasoning-effort; firstmate's profile
@@ -942,7 +1035,7 @@ effort_flag_for_harness() {
       # only low|medium|high and rejects both xhigh and max, so omit those rather
       # than passing a known-bad value.
       case "$effort" in
-        low|medium|high) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
+        low|medium|high) printf '%s\n' "$effort" ;;
       esac
       ;;
     pi|pi-signed|omp)
@@ -951,7 +1044,7 @@ effort_flag_for_harness() {
       # --thinking additionally accepts off/minimal/auto beyond Pi's set; the
       # firstmate effort axis stays within the shared low..max range.
       case "$effort" in
-        low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+        low|medium|high|xhigh|max) printf '%s\n' "$effort" ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
@@ -960,6 +1053,21 @@ effort_flag_for_harness() {
     # kimi likewise has no reasoning-effort flag; the requested axis stays in
     # task metadata but never reaches the launch command.
   esac
+  return 0
+}
+
+# The launch-command spelling of an already-resolved effective effort. The
+# installed codex config schema uses model_reasoning_effort rather than a flag.
+effort_flag_for_harness() {
+  local harness=$1 effort=$2
+  [ -n "$effort" ] || return 0
+  case "$harness" in
+    claude) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
+    codex) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
+    grok) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
+    pi|pi-signed|omp) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+  esac
+  return 0
 }
 
 case "$LAUNCH" in
@@ -2723,7 +2831,24 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
-EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+EFFORT_EFFECTIVE=$(effective_effort_for_harness "$HARNESS" "$EFFORT" "$MODEL")
+EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT_EFFECTIVE")
+# Task meta always records the requested effort, so a launch that lands anywhere
+# else would otherwise read as a silent mismatch. Only report for harnesses that
+# do have a verified effort flag; opencode and kimi have none by design.
+if [ -n "$EFFORT" ] && [ "$EFFORT" != default ] && [ "$EFFORT_EFFECTIVE" != "$EFFORT" ]; then
+  case "$HARNESS" in
+    claude|codex|grok|pi|pi-signed|omp)
+      effort_warn_model=$MODEL
+      [ -n "$effort_warn_model" ] && [ "$effort_warn_model" != default ] || effort_warn_model="the harness default model"
+      if [ -z "$EFFORT_EFFECTIVE" ]; then
+        echo "warning: $HARNESS does not accept effort '$EFFORT' for $effort_warn_model; launching at its default effort (task meta still records effort=$EFFORT)" >&2
+      else
+        echo "warning: $HARNESS launches effort '$EFFORT_EFFECTIVE' instead of the requested '$EFFORT' for $effort_warn_model (task meta still records effort=$EFFORT)" >&2
+      fi
+      ;;
+  esac
+fi
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}

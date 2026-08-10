@@ -270,7 +270,11 @@ Profile `model` and `effort` fields and rule `why` are optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
 Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
 If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
-If a selected profile carries an effort value the chosen harness does not accept, `fm-spawn.sh` records the requested `effort=` in task meta for traceability but omits the launch flag, and bootstrap reports the invalid harness/effort pair as a `CREW_DISPATCH` diagnostic when it is visible in the file.
+If a selected profile carries an effort value the chosen harness does not accept, `fm-spawn.sh` records the requested `effort=` in task meta for traceability, omits the launch flag, and prints a `warning:` naming the dropped effort so the meta value is never a silent mismatch; bootstrap reports the invalid harness/effort pair as a `CREW_DISPATCH` diagnostic when it is visible in the file.
+Acceptance is per harness except for codex `max`, which codex advertises per model: `fm-spawn.sh` asks `codex debug models` whether the model lists `max` and omits the flag when it does not, so bootstrap validation accepts `codex:max` for any model and the model-level check happens at launch.
+A codex profile that pins no model resolves its identity through `codex doctor --json`, codex's own config resolver, and then applies the standing depth preference rather than the pinned-model rule: only `gpt-5.6-luna` keeps `max`, and every other resolved default - including `gpt-5.6-sol`, which does advertise `max` - launches at `medium` instead, so an unnamed spawn never spends max quota on a review-shaped session.
+That cap prints the same `warning:` naming the requested and launched levels, so pin the model in the profile when a crewmate really should run at `max`.
+Both codex queries reach the network - `codex doctor` runs live reachability and update probes, and `codex debug models` refreshes its catalog against a server etag - so each is bounded by `FM_CODEX_PROFILE_TIMEOUT` seconds (default 10) and a timeout takes the same fail-closed answer a refusal would: `max` is omitted for a pinned model and capped to `medium` for an unnamed one, never passed through unverified.
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
 When the file exists, bootstrap validates it with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
@@ -506,6 +510,7 @@ FM_CHECK_TIMEOUT=30     # seconds allowed per slow check script
 FM_PROCEVENT_MAX_OUTPUT_BYTES=1048576   # bound on one captured process-to-event result
 FM_PROCEVENT_CLAIM_ROOT=                # machine-wide source claim root; default $XDG_STATE_HOME/firstmate/procevent-claims
 FM_CODEX_WATCH_CHECKPOINT=180   # seconds per foreground watcher checkpoint in Codex primary supervision
+FM_CODEX_PROFILE_TIMEOUT=10   # seconds allowed per codex model/effort profile query during a spawn; a timeout fails closed (see "Crew dispatch profiles")
 FM_CREW_STATE_NM_TIMEOUT=10   # seconds allowed per no-mistakes query inside fm-crew-state.sh
 FM_CREW_STATE_RUNS_LIMIT=200  # recent no-mistakes run rows scanned when axi status cannot be attributed to the current code
 FM_CREW_STATE_BIN=bin/fm-crew-state.sh   # test override for the current-state reader used by working/paused watcher triage

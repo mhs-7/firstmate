@@ -116,13 +116,14 @@ Use `low` for well-understood work with an explicit bounded path and `xhigh` for
 Choose intermediate levels proportionally as complexity, uncertainty, blast radius, or open-ended reasoning increases.
 When a verified adapter lacks `xhigh`, cap the choice at its highest supported non-`max` level rather than omitting the intended effort silently.
 Never select `max` from this fallback; use it only when the captain has explicitly expressed that per-task or standing preference.
+The captain's standing codex depth preference is that `gpt-5.6-luna` implementation workers run at `max` and `gpt-5.6-sol` reviewers stay at `medium`, so name the model on any codex spawn meant to run at `max`: `bin/fm-spawn.sh` resolves an unnamed codex spawn's model through `codex doctor --json` and caps it at `medium` unless that resolved default is `gpt-5.6-luna`.
 
-The supported launch-profile flags below are verified locally; each row records its evidence.
+The supported launch-profile flags below are verified locally; each row records its evidence, or points to [`docs/verification/harness-adapters.md`](../../../docs/verification/harness-adapters.md) when the raw transcript is too long to belong here.
 
 | Harness | Model flag | Effort flag | Notes |
 |---|---|---|---|
 | claude | `--model <model>` | `--effort <low\|medium\|high\|xhigh\|max>` | Verified on Claude Code 2.1.196. |
-| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Verified on codex-cli 0.142.1. The installed binary schema contains `model_reasoning_effort`, the active config uses it, and the bundled model catalog advertises only low/medium/high/xhigh. `max` is omitted. |
+| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'`, plus `max` only on models that advertise it | Verified 2026-08-10 on codex-cli 0.147.0: codex advertises reasoning levels per model, not per harness, so `max` is model-aware and `bin/fm-spawn.sh` asks `codex debug models` for the selected model before emitting it; evidence in [`docs/verification/harness-adapters.md`](../../../docs/verification/harness-adapters.md). |
 | grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Verified on grok 0.2.99 (2026-07-13). `--effort` is an alias, but firstmate's profile axis is reasoning effort. As of 0.2.99 the ceiling is `high`; both `xhigh` and `max` are rejected with `use one of: high, medium, low`, so firstmate omits them. |
 | pi / pi-signed | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-27 on Pi and pi-signed 0.82.0. Both expose the same accepted thinking levels and completed the same model-qualified max-thinking smoke. |
 | omp | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-08-06 on omp 17.2.10. Accepts the full shared effort vocabulary plus `off`/`minimal`/`auto`; firstmate stays within the shared low..max range. |
@@ -151,8 +152,8 @@ For an unfamiliar harness or model namespace, establish support and provider ide
 A listing that reaches the account and does not contain the model is concrete evidence the model is unsupported: block that candidate and quote the result.
 A discovery surface you could not reach establishes nothing; report that as uncertainty rather than turning it into a supported or unsupported verdict.
 
-When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
-This preserves launch success instead of passing a known-bad value.
+When a requested effort value is outside what the selected harness and model accept, `fm-spawn` still records the requested `effort=` in meta but does not launch it: it omits the effort flag, except for an unnamed-model codex `max` spawn, which launches at the standing reviewer level `medium` instead.
+This preserves launch success instead of passing a known-bad value, and for every harness that has an effort flag at all, either divergence prints a `warning:` naming the requested and launched levels, so a meta value the launch did not honor is never silent.
 
 ## no-mistakes skill invocation
 

@@ -17,6 +17,16 @@
         { "harness": "codex", "model": "gpt-5.5", "effort": "high" }
       ],
       "why": "Use a strong coding profile for big, ambiguous work; resolve the alternatives through quota-array-dispatch."
+    },
+    {
+      "when": "The task is hands-on implementation work the captain wants run at maximum reasoning depth.",
+      "use": { "harness": "codex", "model": "gpt-5.6-luna", "effort": "max" },
+      "why": "Standing captain preference: implementation workers run at max. Codex accepts max per model, and gpt-5.6-luna advertises it; pinning max on a model without it would be omitted at launch."
+    },
+    {
+      "when": "The task is reviewing someone else's change rather than writing one.",
+      "use": { "harness": "codex", "model": "gpt-5.6-sol", "effort": "medium" },
+      "why": "Standing captain preference: reviewers stay at medium so review throughput does not consume the depth budget implementation needs."
     }
   ],
   "default": [
