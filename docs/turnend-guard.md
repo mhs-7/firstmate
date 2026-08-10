@@ -32,12 +32,12 @@ Registered `state/procevent/*.source` records also require supervision even thou
 The default cross-harness mode exits silently with no supervision need.
 Every mode treats `state/x-watch.check.sh` as supervision need, so X-mode relay polling remains guarded without an in-flight task.
 Otherwise it calls `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`, the same identity-matched lock and fresh-beacon check used by `bin/fm-watch-arm.sh`.
-`bin/fm-guard.sh` uses the status helper's fresh-beacon field so a watcher between one-shot cycles does not produce a false handling-turn alarm.
-A stale beacon blocks even when a watcher pid is live.
-A fresh leftover beacon blocks when the lock is missing, dead, or identity-mismatched.
+At turn end, a stale beacon blocks even when a watcher pid is live.
+At turn end, a fresh leftover beacon blocks when the lock is missing, dead, or identity-mismatched.
+`bin/fm-guard.sh` instead uses the status helper's fresh-beacon field alone, so a watcher between one-shot cycles does not produce a false handling-turn alarm, and a fresh leftover beacon leaves that pull guard quiet.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repository-root `state/`.
-`FM_GUARD_GRACE` controls beacon freshness and defaults to 300 seconds.
+`FM_GUARD_GRACE` controls beacon freshness and defaults to 300 seconds; both predicates count a beacon fresh only while its age is strictly below the grace window, so a beacon exactly at the boundary is already stale.
 If `jq` is missing or hook stdin is empty, the guard exits 0 because it cannot safely read loop-guard fields.
 
 ## Harness integrations
