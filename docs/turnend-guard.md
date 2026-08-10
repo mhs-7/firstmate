@@ -14,7 +14,8 @@ Do not infer this guard's scope, loop safety, or compatibility tradeoffs for tho
 `bin/fm-guard.sh` is a pull-based warning that runs only when another supervision command invokes it.
 The turn-end guard closes the remaining gap at the primary's own turn boundary.
 When work, a process-event source, or X-mode relay polling needs supervision and no identity-matched watcher has a fresh beacon, the harness integration must either block the turn end or force one bounded follow-up that uses the recovery instruction from the emitted session-start protocol.
-Both guards require the same live lock, process identity, home/path binding, and fresh-beacon predicate.
+The turn-end guard requires the live lock, process identity, home/path binding, and fresh-beacon predicate.
+The ordinary pull guard uses the fresh-beacon grace predicate alone because the one-shot watcher can be between cycles during handling.
 The guard remains a backstop; [`watcher-continuity.md`](watcher-continuity.md) owns normal continuity.
 
 ## Shared predicate
@@ -31,7 +32,7 @@ Registered `state/procevent/*.source` records also require supervision even thou
 The default cross-harness mode exits silently with no supervision need.
 Every mode treats `state/x-watch.check.sh` as supervision need, so X-mode relay polling remains guarded without an in-flight task.
 Otherwise it calls `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`, the same identity-matched lock and fresh-beacon check used by `bin/fm-watch-arm.sh`.
-`bin/fm-guard.sh` uses that same check rather than treating the status helper's fresh-beacon field as sufficient.
+`bin/fm-guard.sh` uses the status helper's fresh-beacon field so a watcher between one-shot cycles does not produce a false handling-turn alarm.
 A stale beacon blocks even when a watcher pid is live.
 A fresh leftover beacon blocks when the lock is missing, dead, or identity-mismatched.
 

@@ -49,6 +49,24 @@ run_guard_case() {
     "$ROOT/bin/fm-guard.sh" 2>&1
 }
 
+run_guard_case_with_grace() {
+  local dir=$1 grace=$2
+  FM_ROOT_OVERRIDE="$(case_root "$dir")" \
+    FM_HOME="$(case_home "$dir")" \
+    FM_GUARD_GRACE="$grace" \
+    "$ROOT/bin/fm-guard.sh" 2>&1
+}
+
+set_mtime() {
+  local epoch=$1 file=$2 stamp
+  if stamp=$(date -r "$epoch" +%Y%m%d%H%M.%S 2>/dev/null); then
+    touch -t "$stamp" "$file"
+  else
+    stamp=$(date -d "@$epoch" +%Y%m%d%H%M.%S)
+    touch -t "$stamp" "$file"
+  fi
+}
+
 run_guard_case_read_only() {
   local dir=$1
   FM_ROOT_OVERRIDE="$(case_root "$dir")" \
@@ -96,14 +114,44 @@ test_repeated_same_episode_prints_reminder_only() {
   pass "fm-guard stale banner: repeated same-episode calls print a concise reminder only"
 }
 
-test_fresh_beacon_without_live_watcher_stays_alarm() {
+test_fresh_beacon_without_live_watcher_stays_quiet() {
   local dir out
   dir=$(make_guard_case fresh-no-live)
   touch "$(case_home "$dir")/state/.last-watcher-beat"
   out=$(run_guard_case "$dir")
-  [ "$(count_text "$out" "WATCHER DOWN - SUPERVISION IS OFF")" -eq 1 ] \
-    || fail "a fresh leftover beacon without a live watcher must still alarm: $out"
-  pass "fm-guard stale banner: a fresh beacon without a live watcher remains unhealthy"
+  [ -z "$out" ] || fail "a beacon inside grace must keep the handling-turn guard quiet: $out"
+  pass "fm-guard stale banner: a fresh beacon keeps the handling-turn guard quiet"
+}
+
+test_beacon_grace_boundary() {
+  local dir home out now grace=300
+
+  dir=$(make_guard_case grace-just-inside)
+  home=$(case_home "$dir")
+  : > "$home/state/.last-watcher-beat"
+  now=$(date +%s)
+  set_mtime $((now - grace + 5)) "$home/state/.last-watcher-beat"
+  out=$(run_guard_case_with_grace "$dir" "$grace")
+  [ -z "$out" ] || fail "a beacon just inside grace must stay quiet: $out"
+
+  dir=$(make_guard_case grace-exact)
+  home=$(case_home "$dir")
+  : > "$home/state/.last-watcher-beat"
+  now=$(date +%s)
+  set_mtime $((now - grace)) "$home/state/.last-watcher-beat"
+  out=$(run_guard_case_with_grace "$dir" "$grace")
+  assert_contains "$out" "WATCHER DOWN - SUPERVISION IS OFF" \
+    "a beacon exactly at the exclusive grace boundary must warn"
+
+  dir=$(make_guard_case grace-just-outside)
+  home=$(case_home "$dir")
+  : > "$home/state/.last-watcher-beat"
+  now=$(date +%s)
+  set_mtime $((now - grace - 5)) "$home/state/.last-watcher-beat"
+  out=$(run_guard_case_with_grace "$dir" "$grace")
+  assert_contains "$out" "WATCHER DOWN - SUPERVISION IS OFF" \
+    "a beacon just outside grace must warn"
+  pass "fm-guard stale banner: just-inside, exact, and just-outside grace boundaries"
 }
 
 test_x_mode_without_live_watcher_stays_alarm() {
@@ -285,7 +333,8 @@ test_read_only_never_mutates_stale_banner_state_files() {
 
 test_first_stale_call_prints_full_banner
 test_repeated_same_episode_prints_reminder_only
-test_fresh_beacon_without_live_watcher_stays_alarm
+test_fresh_beacon_without_live_watcher_stays_quiet
+test_beacon_grace_boundary
 test_x_mode_without_live_watcher_stays_alarm
 test_healthy_recovery_rearms_next_stale_episode
 test_concurrent_same_episode_prints_one_full_banner
