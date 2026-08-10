@@ -152,8 +152,8 @@ For an unfamiliar harness or model namespace, establish support and provider ide
 A listing that reaches the account and does not contain the model is concrete evidence the model is unsupported: block that candidate and quote the result.
 A discovery surface you could not reach establishes nothing; report that as uncertainty rather than turning it into a supported or unsupported verdict.
 
-When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
-This preserves launch success instead of passing a known-bad value.
+When a requested effort value is outside what the selected harness and model accept, `fm-spawn` still records the requested `effort=` in meta but does not launch it: it omits the effort flag, except for an unnamed-model codex `max` spawn, which launches at the standing reviewer level `medium` instead.
+This preserves launch success instead of passing a known-bad value, and for every harness that has an effort flag at all, either divergence prints a `warning:` naming the requested and launched levels, so a meta value the launch did not honor is never silent.
 
 ## no-mistakes skill invocation
 
