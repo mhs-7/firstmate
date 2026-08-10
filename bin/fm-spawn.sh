@@ -919,8 +919,25 @@ model_flag_for_harness() {
   esac
 }
 
+# codex advertises reasoning levels per model rather than per harness. As of
+# codex-cli 0.147.0 every catalog model accepts low|medium|high|xhigh, but only
+# the gpt-5.6 family accepts max; pinning max on gpt-5.5 or older fails the whole
+# session with HTTP 400 unsupported_value on every turn. Ask codex's own catalog
+# instead of keeping a hand-maintained capability table, and treat anything short
+# of a definite yes - no codex, no jq, unresolvable model, unlisted slug - as no.
+codex_model_supports_effort() {
+  local model=$1 effort=$2
+  [ -n "$model" ] && [ "$model" != default ] || return 1
+  command -v codex >/dev/null 2>&1 || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  codex debug models 2>/dev/null | jq -e --arg m "$model" --arg e "$effort" '
+    (.models // [])
+    | any(.slug == $m and ((.supported_reasoning_levels // []) | any(.effort == $e)))
+  ' >/dev/null 2>&1
+}
+
 effort_flag_for_harness() {
-  local harness=$1 effort=$2
+  local harness=$1 effort=$2 model=$3
   [ -n "$effort" ] && [ "$effort" != default ] || return 0
   case "$harness" in
     claude)
@@ -929,11 +946,16 @@ effort_flag_for_harness() {
       esac
       ;;
     codex)
-      # The installed codex config schema uses model_reasoning_effort, and the
-      # bundled model catalog advertises low|medium|high|xhigh|max. Keep the
-      # profile axis within low..max even though newer models may add levels.
+      # The installed codex config schema uses model_reasoning_effort. Levels up
+      # to xhigh are accepted by every catalog model, so they pass through
+      # unconditionally; max is gated on the selected model advertising it.
       case "$effort" in
-        low|medium|high|xhigh|max) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
+        low|medium|high|xhigh) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
+        max)
+          if codex_model_supports_effort "$model" max; then
+            printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"max\"")"
+          fi
+          ;;
       esac
       ;;
     grok)
@@ -2723,7 +2745,19 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
-EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL")
+# Task meta always records the requested effort, so an omitted launch flag would
+# otherwise read as a silent mismatch. Only warn for harnesses that do have a
+# verified effort flag; opencode and kimi have none by design.
+if [ -n "$EFFORT" ] && [ "$EFFORT" != default ] && [ -z "$EFFORTFLAG" ]; then
+  case "$HARNESS" in
+    claude|codex|grok|pi|pi-signed|omp)
+      effort_warn_model=$MODEL
+      [ -n "$effort_warn_model" ] && [ "$effort_warn_model" != default ] || effort_warn_model="the harness default model"
+      echo "warning: $HARNESS does not accept effort '$EFFORT' for $effort_warn_model; launching at its default effort (task meta still records effort=$EFFORT)" >&2
+      ;;
+  esac
+fi
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}

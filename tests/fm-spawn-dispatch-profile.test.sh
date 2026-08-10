@@ -42,6 +42,25 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  # fm-spawn asks codex's own catalog whether the selected model advertises max
+  # reasoning effort. Stub it so the assertion pins firstmate's gating logic
+  # rather than whichever codex catalog the developer happens to have installed.
+  # The two slugs mirror codex-cli 0.147.0: gpt-5.6-luna lists max, gpt-5.5 does not.
+  cat > "$fakebin/codex" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = debug ] && [ "${2:-}" = models ]; then
+  cat <<'JSON'
+{"models":[
+  {"slug":"gpt-5.6-luna","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"}]},
+  {"slug":"gpt-5.5","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"}]}
+]}
+JSON
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$fakebin/codex"
   fm_fake_exit0 "$fakebin" treehouse pi-signed
   printf '%s\n' "$fakebin"
 }
@@ -69,7 +88,7 @@ make_spawn_case() {
 
 enable_dispatch_profile() {
   local home=$1
-  printf '%s\n' '{"rules":[{"when":"current events","use":{"harness":"grok","model":"grok-4","effort":"high"}}],"default":{"harness":"codex","model":"gpt-5","effort":"medium"}}' \
+  printf '%s\n' '{"rules":[{"when":"current events","use":{"harness":"grok","model":"grok-4","effort":"high"}}],"default":{"harness":"codex","model":"gpt-5.5","effort":"medium"}}' \
     > "$home/config/crew-dispatch.json"
 }
 
@@ -322,13 +341,13 @@ test_active_dispatch_profile_allows_explicit_harness() {
   enable_dispatch_profile "$HOME_DIR"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
-    "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high)
+    "$id" "$PROJ_DIR" --harness codex --model gpt-5.5 --effort high)
   status=$?
   expect_code 0 "$status" "explicit harness should satisfy active dispatch-profile requirement"
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report explicit codex harness"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
+  assert_contains "$launch" "codex --model 'gpt-5.5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
     "explicit harness launch did not thread model and effort"
   pass "active crew-dispatch profile allows an explicit resolved harness"
 }
@@ -341,11 +360,11 @@ test_active_dispatch_profile_allows_positional_harness() {
   enable_dispatch_profile "$HOME_DIR"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
-    "$id" "$PROJ_DIR" codex --model gpt-5 --effort high)
+    "$id" "$PROJ_DIR" codex --model gpt-5.5 --effort high)
   status=$?
   expect_code 0 "$status" "positional harness should satisfy active dispatch-profile requirement"
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report positional codex harness"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.5 high
   pass "active crew-dispatch profile allows the legacy positional harness form"
 }
 
@@ -389,30 +408,54 @@ test_codex_threads_model_and_effort() {
   rec=$(make_spawn_case profile-codex codex "$id")
   read_case_record "$rec"
 
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --effort high)
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5.5 --effort high)
   status=$?
   expect_code 0 "$status" "codex spawn with profile flags should succeed"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
+  assert_contains "$launch" "codex --model 'gpt-5.5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not thread model and reasoning effort config"
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
 
-test_codex_threads_max_effort() {
+test_codex_threads_max_effort_for_model_that_advertises_it() {
   local rec id out status launch
   id=profile-codex-max-z4
   rec=$(make_spawn_case profile-codex-max codex "$id")
   read_case_record "$rec"
 
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --effort max)
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5.6-luna --effort max)
   status=$?
-  expect_code 0 "$status" "codex spawn with max effort should succeed"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
+  expect_code 0 "$status" "codex spawn with max effort on a max-capable model should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.6-luna max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"max\"' --dangerously-bypass-approvals-and-sandbox" \
+  assert_contains "$launch" "codex --model 'gpt-5.6-luna' -c 'model_reasoning_effort=\"max\"' --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not thread the supported max reasoning effort"
-  pass "codex receives supported max effort through model_reasoning_effort"
+  assert_not_contains "$out" "does not accept effort" "codex must not warn when the model advertises max"
+  pass "codex receives max effort for a model whose catalog entry advertises it"
+}
+
+test_codex_omits_max_effort_for_model_without_it() {
+  local rec id out status launch
+  id=profile-codex-max-unsupported-z4b
+  rec=$(make_spawn_case profile-codex-max-unsupported codex "$id")
+  read_case_record "$rec"
+
+  # codex-cli 0.147.0 advertises reasoning levels per model: gpt-5.5 stops at
+  # xhigh and the API rejects max with HTTP 400 on every turn, so the flag must
+  # be omitted rather than passed through as a known-bad value.
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5.5 --effort max)
+  status=$?
+  expect_code 0 "$status" "codex spawn with max effort on a model without max should omit the effort flag"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.5 max
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex --model 'gpt-5.5' --dangerously-bypass-approvals-and-sandbox" \
+    "codex launch did not preserve the model flag when max effort was omitted"
+  assert_not_contains "$launch" "model_reasoning_effort" \
+    "codex launch must omit max reasoning effort for a model that does not advertise it"
+  assert_contains "$out" "codex does not accept effort 'max' for gpt-5.5" \
+    "omitting max must be reported, not silent, since task meta still records effort=max"
+  pass "codex omits max effort for a model whose catalog entry lacks it"
 }
 
 test_grok_threads_model_and_reasoning_effort() {
@@ -747,13 +790,13 @@ test_batch_forwards_shared_profile_flags() {
   enable_dispatch_profile "$HOME_DIR"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
-    "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness codex --model gpt-5 --effort high)
+    "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness codex --model gpt-5.5 --effort high)
   status=$?
   expect_code 0 "$status" "batch spawn with shared profile flags should succeed"
   assert_contains "$out" "spawned $id1 harness=codex" "first batch task did not use shared harness"
   assert_contains "$out" "spawned $id2 harness=codex" "second batch task did not use shared harness"
-  assert_meta_profile "$HOME_DIR/state/$id1.meta" codex gpt-5 high
-  assert_meta_profile "$HOME_DIR/state/$id2.meta" codex gpt-5 high
+  assert_meta_profile "$HOME_DIR/state/$id1.meta" codex gpt-5.5 high
+  assert_meta_profile "$HOME_DIR/state/$id2.meta" codex gpt-5.5 high
   pass "batch dispatch forwards shared --harness, --model, and --effort to every pair"
 }
 
@@ -836,7 +879,8 @@ test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
-test_codex_threads_max_effort
+test_codex_threads_max_effort_for_model_that_advertises_it
+test_codex_omits_max_effort_for_model_without_it
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort
