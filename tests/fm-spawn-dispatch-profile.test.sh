@@ -42,20 +42,33 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  # fm-spawn asks codex's own catalog whether the selected model advertises max
-  # reasoning effort. Stub it so the assertion pins firstmate's gating logic
-  # rather than whichever codex catalog the developer happens to have installed.
-  # The two slugs mirror codex-cli 0.147.0: gpt-5.6-luna lists max, gpt-5.5 does not.
+  # fm-spawn asks codex's own catalog whether a model advertises max reasoning
+  # effort, and codex's own doctor which model an unnamed spawn resolves to.
+  # Stub both so the assertions pin firstmate's gating logic rather than whichever
+  # codex catalog and config the developer happens to have installed. The slugs
+  # mirror codex-cli 0.147.0: gpt-5.6-sol and gpt-5.6-luna list max, gpt-5.5 does
+  # not. FM_FAKE_CODEX_DEFAULT_MODEL sets the resolved default; empty means codex
+  # could not establish one.
   cat > "$fakebin/codex" <<'SH'
 #!/usr/bin/env bash
 set -u
 if [ "${1:-}" = debug ] && [ "${2:-}" = models ]; then
   cat <<'JSON'
 {"models":[
+  {"slug":"gpt-5.6-sol","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"}]},
   {"slug":"gpt-5.6-luna","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"}]},
   {"slug":"gpt-5.5","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"}]}
 ]}
 JSON
+  exit 0
+fi
+if [ "${1:-}" = doctor ]; then
+  default_model=${FM_FAKE_CODEX_DEFAULT_MODEL-gpt-5.6-sol}
+  if [ -n "$default_model" ]; then
+    printf '{"checks":{"config.load":{"details":{"model":"%s"}}}}\n' "$default_model"
+  else
+    printf '{"checks":{"config.load":{"details":{}}}}\n'
+  fi
   exit 0
 fi
 exit 0
@@ -456,6 +469,72 @@ test_codex_omits_max_effort_for_model_without_it() {
   assert_contains "$out" "codex does not accept effort 'max' for gpt-5.5" \
     "omitting max must be reported, not silent, since task meta still records effort=max"
   pass "codex omits max effort for a model whose catalog entry lacks it"
+}
+
+test_codex_unnamed_max_spawn_caps_at_the_reviewer_ceiling() {
+  local rec id out status launch
+  id=profile-codex-max-implicit-z4c
+  rec=$(make_spawn_case profile-codex-max-implicit codex "$id")
+  read_case_record "$rec"
+
+  # An unnamed spawn inherits the local codex default. gpt-5.6-sol advertises max,
+  # but the standing captain preference runs unnamed codex spawns at the reviewer
+  # level rather than burning max quota on a review-shaped session.
+  export FM_FAKE_CODEX_DEFAULT_MODEL=gpt-5.6-sol
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --effort max)
+  status=$?
+  unset FM_FAKE_CODEX_DEFAULT_MODEL
+  expect_code 0 "$status" "codex spawn with max effort and no model should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex default max
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex -c 'model_reasoning_effort=\"medium\"' --dangerously-bypass-approvals-and-sandbox" \
+    "an unnamed codex max spawn did not cap at the reviewer effort ceiling"
+  assert_not_contains "$launch" 'model_reasoning_effort="max"' \
+    "an unnamed codex spawn resolving to gpt-5.6-sol must not launch at max"
+  assert_contains "$out" "codex launches effort 'medium' instead of the requested 'max'" \
+    "capping max must be reported, not silent, since task meta still records effort=max"
+  pass "an unnamed codex max spawn resolving to gpt-5.6-sol caps at the reviewer ceiling"
+}
+
+test_codex_unnamed_max_spawn_keeps_max_for_the_policy_max_model() {
+  local rec id out status launch
+  id=profile-codex-max-implicit-luna-z4d
+  rec=$(make_spawn_case profile-codex-max-implicit-luna codex "$id")
+  read_case_record "$rec"
+
+  # The same unnamed spawn keeps max when the resolved default is the model the
+  # standing preference runs implementation workers at.
+  export FM_FAKE_CODEX_DEFAULT_MODEL=gpt-5.6-luna
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --effort max)
+  status=$?
+  unset FM_FAKE_CODEX_DEFAULT_MODEL
+  expect_code 0 "$status" "codex spawn with max effort and no model should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex default max
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex -c 'model_reasoning_effort=\"max\"' --dangerously-bypass-approvals-and-sandbox" \
+    "an unnamed codex spawn resolving to gpt-5.6-luna did not keep max"
+  assert_not_contains "$out" "instead of the requested" \
+    "codex must not warn when the resolved default model runs at max"
+  pass "an unnamed codex max spawn resolving to gpt-5.6-luna keeps max"
+}
+
+test_codex_unnamed_max_spawn_caps_when_the_default_model_is_unresolvable() {
+  local rec id out status launch
+  id=profile-codex-max-unresolved-z4e
+  rec=$(make_spawn_case profile-codex-max-unresolved codex "$id")
+  read_case_record "$rec"
+
+  export FM_FAKE_CODEX_DEFAULT_MODEL=
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --effort max)
+  status=$?
+  unset FM_FAKE_CODEX_DEFAULT_MODEL
+  expect_code 0 "$status" "codex spawn with an unresolvable default model should still succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex -c 'model_reasoning_effort=\"medium\"' --dangerously-bypass-approvals-and-sandbox" \
+    "an unresolvable codex default model must fall back to the reviewer effort ceiling, not to max"
+  assert_contains "$out" "codex launches effort 'medium' instead of the requested 'max'" \
+    "the fallback cap must be reported, not silent"
+  pass "an unnamed codex max spawn caps at the reviewer ceiling when the default model is unresolvable"
 }
 
 test_grok_threads_model_and_reasoning_effort() {
@@ -881,6 +960,9 @@ test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
 test_codex_threads_max_effort_for_model_that_advertises_it
 test_codex_omits_max_effort_for_model_without_it
+test_codex_unnamed_max_spawn_caps_at_the_reviewer_ceiling
+test_codex_unnamed_max_spawn_keeps_max_for_the_policy_max_model
+test_codex_unnamed_max_spawn_caps_when_the_default_model_is_unresolvable
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort
