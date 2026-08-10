@@ -14,7 +14,8 @@ Do not infer this guard's scope, loop safety, or compatibility tradeoffs for tho
 `bin/fm-guard.sh` is a pull-based warning that runs only when another supervision command invokes it.
 The turn-end guard closes the remaining gap at the primary's own turn boundary.
 When work, a process-event source, or X-mode relay polling needs supervision and no identity-matched watcher has a fresh beacon, the harness integration must either block the turn end or force one bounded follow-up that uses the recovery instruction from the emitted session-start protocol.
-Both guards require the same live lock, process identity, home/path binding, and fresh-beacon predicate.
+The turn-end guard requires the live lock, process identity, home/path binding, and fresh-beacon predicate.
+The ordinary pull guard uses the fresh-beacon grace predicate alone because the one-shot watcher can be between cycles during handling.
 The guard remains a backstop; [`watcher-continuity.md`](watcher-continuity.md) owns normal continuity.
 
 ## Shared predicate
@@ -31,12 +32,12 @@ Registered `state/procevent/*.source` records also require supervision even thou
 The default cross-harness mode exits silently with no supervision need.
 Every mode treats `state/x-watch.check.sh` as supervision need, so X-mode relay polling remains guarded without an in-flight task.
 Otherwise it calls `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`, the same identity-matched lock and fresh-beacon check used by `bin/fm-watch-arm.sh`.
-`bin/fm-guard.sh` uses that same check rather than treating the status helper's fresh-beacon field as sufficient.
-A stale beacon blocks even when a watcher pid is live.
-A fresh leftover beacon blocks when the lock is missing, dead, or identity-mismatched.
+At turn end, a stale beacon blocks even when a watcher pid is live.
+At turn end, a fresh leftover beacon blocks when the lock is missing, dead, or identity-mismatched.
+`bin/fm-guard.sh` instead uses the status helper's fresh-beacon field alone, so a watcher between one-shot cycles does not produce a false handling-turn alarm, and a fresh leftover beacon leaves that pull guard quiet.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repository-root `state/`.
-`FM_GUARD_GRACE` controls beacon freshness and defaults to 300 seconds.
+`FM_GUARD_GRACE` controls beacon freshness and defaults to 300 seconds; both predicates count a beacon fresh only while its age is strictly below the grace window, so a beacon exactly at the boundary is already stale.
 If `jq` is missing or hook stdin is empty, the guard exits 0 because it cannot safely read loop-guard fields.
 
 ## Harness integrations
@@ -104,7 +105,7 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 ## Regression coverage
 
 `tests/fm-turnend-guard.test.sh` covers the predicate, main and secondmate primary scope, child-worktree exclusion, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, the live-lock and fresh-beacon guard predicate, the cooperative `--claude` claim wait, monotonic failed-epoch progression, bounded attended fail-open, post-alarm continuation suppression, positive recovery reset, Pi logical-run latching, missing-`jq` behavior, all five primary registrations, Grok native and legacy selection, typed field precedence, malformed input, and exactly-one-path safety.
-`tests/fm-guard-stale-banner.test.sh` covers the matching pull-guard predicate, including the fresh-leftover-beacon negative control.
+`tests/fm-guard-stale-banner.test.sh` covers the pull guard's separate beacon-grace predicate, including the just-inside, exactly-at, and just-outside grace boundaries and the fresh-leftover-beacon quiet case that the stricter turn-end predicate still blocks.
 `tests/fm-kimi-harness.test.sh` covers the separate Kimi crew hook's format preservation, idempotence, refusal cases, token guard, spawn registration, and teardown cleanup.
 `tests/fm-supervision-instructions.test.sh` covers recovery-line ownership and pi-signed's identity-preserving reuse of Pi's protocol.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` is the opt-in isolated Pi path.
