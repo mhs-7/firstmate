@@ -928,6 +928,27 @@ model_flag_for_harness() {
 CODEX_IMPLICIT_MAX_MODEL=gpt-5.6-luna
 CODEX_IMPLICIT_MAX_CEILING=medium
 
+# Seconds any codex profile query may take before the spawn stops waiting on it.
+# `codex doctor` is a full health report whose only field this file reads costs
+# nothing, but which also runs live reachability and update probes, and `codex
+# debug models` refreshes its catalog against a server etag. Neither is allowed
+# to stall an interactive launch behind a network round trip, so both run bounded
+# and every timeout falls through to the same fail-closed answer as a refusal.
+FM_CODEX_PROFILE_TIMEOUT=${FM_CODEX_PROFILE_TIMEOUT:-10}
+case "$FM_CODEX_PROFILE_TIMEOUT" in ''|*[!0-9]*|0) FM_CODEX_PROFILE_TIMEOUT=10 ;; esac
+
+codex_bounded() {  # <command...>
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$FM_CODEX_PROFILE_TIMEOUT" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$FM_CODEX_PROFILE_TIMEOUT" "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$FM_CODEX_PROFILE_TIMEOUT" "$@"
+  else
+    return 124
+  fi
+}
+
 # The model codex will actually run: the pinned model when the spawn names one,
 # otherwise the model codex itself resolves from its own config precedence.
 # `codex doctor --json` is codex's own resolver, so this follows CODEX_HOME and
@@ -941,7 +962,7 @@ codex_effective_model() {
   fi
   command -v codex >/dev/null 2>&1 || return 1
   command -v jq >/dev/null 2>&1 || return 1
-  resolved=$(codex doctor --json 2>/dev/null \
+  resolved=$(codex_bounded codex doctor --json 2>/dev/null </dev/null \
     | jq -r '.checks["config.load"].details.model // empty' 2>/dev/null) || return 1
   [ -n "$resolved" ] || return 1
   printf '%s\n' "$resolved"
@@ -958,7 +979,7 @@ codex_model_supports_effort() {
   [ -n "$model" ] && [ "$model" != default ] || return 1
   command -v codex >/dev/null 2>&1 || return 1
   command -v jq >/dev/null 2>&1 || return 1
-  codex debug models 2>/dev/null | jq -e --arg m "$model" --arg e "$effort" '
+  codex_bounded codex debug models 2>/dev/null </dev/null | jq -e --arg m "$model" --arg e "$effort" '
     (.models // [])
     | any(.slug == $m and ((.supported_reasoning_levels // []) | any(.effort == $e)))
   ' >/dev/null 2>&1

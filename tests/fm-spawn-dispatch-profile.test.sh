@@ -48,10 +48,15 @@ SH
   # codex catalog and config the developer happens to have installed. The slugs
   # mirror codex-cli 0.147.0: gpt-5.6-sol and gpt-5.6-luna list max, gpt-5.5 does
   # not. FM_FAKE_CODEX_DEFAULT_MODEL sets the resolved default; empty means codex
-  # could not establish one.
+  # could not establish one, and FM_FAKE_CODEX_HANG makes every query block so the
+  # spawn's bounded-query fallback can be exercised.
   cat > "$fakebin/codex" <<'SH'
 #!/usr/bin/env bash
 set -u
+if [ -n "${FM_FAKE_CODEX_HANG:-}" ]; then
+  sleep "$FM_FAKE_CODEX_HANG"
+  exit 0
+fi
 if [ "${1:-}" = debug ] && [ "${2:-}" = models ]; then
   cat <<'JSON'
 {"models":[
@@ -537,6 +542,52 @@ test_codex_unnamed_max_spawn_caps_when_the_default_model_is_unresolvable() {
   pass "an unnamed codex max spawn caps at the reviewer ceiling when the default model is unresolvable"
 }
 
+test_codex_profile_queries_are_bounded() {
+  local rec id out status launch started elapsed
+  id=profile-codex-slow-query-z4f
+  rec=$(make_spawn_case profile-codex-slow-query codex "$id")
+  read_case_record "$rec"
+
+  # codex's model queries reach the network, so a degraded link must not stall an
+  # interactive launch: they are bounded and every timeout takes the same
+  # fail-closed answer a refusal would.
+  export FM_FAKE_CODEX_HANG=30 FM_CODEX_PROFILE_TIMEOUT=1
+  started=$SECONDS
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --effort max)
+  status=$?
+  elapsed=$((SECONDS - started))
+  unset FM_FAKE_CODEX_HANG FM_CODEX_PROFILE_TIMEOUT
+  expect_code 0 "$status" "codex spawn should succeed even when its model queries hang"
+  [ "$elapsed" -lt 20 ] || fail "codex profile queries were not bounded; spawn waited ${elapsed}s on a hanging codex"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex -c 'model_reasoning_effort=\"medium\"' --dangerously-bypass-approvals-and-sandbox" \
+    "a timed-out codex model query must fall back to the reviewer effort ceiling, not to max"
+  assert_contains "$out" "codex launches effort 'medium' instead of the requested 'max'" \
+    "the bounded-query fallback must be reported, not silent"
+  pass "codex profile queries are bounded and fail closed when codex hangs"
+}
+
+test_codex_bounded_query_omits_max_for_a_pinned_model() {
+  local rec id out status launch
+  id=profile-codex-slow-query-pinned-z4g
+  rec=$(make_spawn_case profile-codex-slow-query-pinned codex "$id")
+  read_case_record "$rec"
+
+  export FM_FAKE_CODEX_HANG=30 FM_CODEX_PROFILE_TIMEOUT=1
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5.6-luna --effort max)
+  status=$?
+  unset FM_FAKE_CODEX_HANG FM_CODEX_PROFILE_TIMEOUT
+  expect_code 0 "$status" "codex spawn should succeed even when the catalog query hangs"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex --model 'gpt-5.6-luna' --dangerously-bypass-approvals-and-sandbox" \
+    "a timed-out catalog query must still preserve the pinned model flag"
+  assert_not_contains "$launch" "model_reasoning_effort" \
+    "an unanswered catalog query must omit max rather than pass an unverified value"
+  assert_contains "$out" "codex does not accept effort 'max' for gpt-5.6-luna" \
+    "the omitted effort must be reported, not silent"
+  pass "an unanswered codex catalog query omits max for a pinned model"
+}
+
 test_grok_threads_model_and_reasoning_effort() {
   local rec id out status launch
   id=profile-grok-z5
@@ -963,6 +1014,8 @@ test_codex_omits_max_effort_for_model_without_it
 test_codex_unnamed_max_spawn_caps_at_the_reviewer_ceiling
 test_codex_unnamed_max_spawn_keeps_max_for_the_policy_max_model
 test_codex_unnamed_max_spawn_caps_when_the_default_model_is_unresolvable
+test_codex_profile_queries_are_bounded
+test_codex_bounded_query_omits_max_for_a_pinned_model
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort
