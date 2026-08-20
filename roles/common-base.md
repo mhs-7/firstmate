@@ -98,5 +98,5 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 <!-- provenance
 Directive provenance (spec report b.1): items 1-5 are the fleet report's non-negotiables (each multi-incident); 6 merges fleet section 8.9 with cfb no-broadened-authorization; 7 merges fleet section 8.10 with captain candidate 6; 8 is captain candidate 3; 9 is captain candidate 1 with the data-store carve-out; 10 is cfb gap 8 resolving disagreement D4; 11 is cfb gap 11. Captain candidates 2 and 4 are skipped per the assessment. The precedence section and prune rule are spec b.1 and D2/D3 resolutions; wording is compressed from the b.1 draft to hold the D1 base budget while keeping every directive.
-Hard constraint: the Karpathy block above is byte-verbatim from karpathy-rules-verbatim.md and hash-pinned by bin/fm-roles-lint.sh; never edit it.
+Hard constraint: the Karpathy block above is byte-verbatim from roles/karpathy-rules-verbatim.md and hash-pinned by bin/fm-roles-lint.sh; never edit it.
 -->

@@ -34,7 +34,7 @@ BASE_FILE="$ROLES_DIR/common-base.md"
 ANNEX_FILE="$ROLES_DIR/annex-deploy-verifier.md"
 
 # The pinned sha256 of the byte-verbatim Karpathy block, captured from
-# karpathy-rules-verbatim.md (lines 8-72, each line newline-terminated).
+# roles/karpathy-rules-verbatim.md (lines 8-72, each line newline-terminated).
 KARPATHY_PIN=694a2d721e41c385f3db492838c23299826df5ba9809e3b0721aac70021e196a
 
 # Hard word ceilings (spec D1). The assemble/overlay ceiling is 550 and the

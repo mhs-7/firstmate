@@ -373,6 +373,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "roles/karpathy-rules-verbatim.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "roles/scout.md",
       "audience": "agent-runtime"
     },
