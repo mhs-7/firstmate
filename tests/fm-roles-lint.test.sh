@@ -155,6 +155,33 @@ test_missing_dist_file_fails_lint() {
   pass "missing committed dist charter is detected"
 }
 
+# The --brief reviewer-blinding check (role-charter decision 3, spec c.4.4):
+# a second-vendor-reviewer brief that references the primary review's report
+# path must be refused so staging never delivers that report into the blinded
+# seat; a second-vendor brief without it, and any other role's brief, pass.
+test_brief_blinding_refuses_primary_report_reference() {
+  local dir out rc
+  dir=$(fm_test_tmproot "fm-roles-blinding")
+  mkdir -p "$dir"
+  printf 'Role charter: role=second-vendor-reviewer date=2026-08-20 hash=abc\n# Task\nPrimary report: data/primary-z9/report.md\n' > "$dir/bad.md"
+  printf 'Role charter: role=second-vendor-reviewer date=2026-08-20 hash=abc\n# Task\nReview independently.\n' > "$dir/good.md"
+  printf 'Role charter: role=implementer date=2026-08-20 hash=abc\n# Task\nUse data/primary-z9/report.md\n' > "$dir/other.md"
+  set +e
+  out=$("$LINT" --brief "$dir/bad.md" 2>&1); rc=$?
+  set -e
+  expect_code 1 "$rc" "second-vendor brief naming the primary report path must be refused"
+  assert_contains "$out" "primary review's report path" "refusal must name the report path violation"
+  set +e
+  out=$("$LINT" --brief "$dir/good.md" 2>&1); rc=$?
+  set -e
+  expect_code 0 "$rc" "a blinded second-vendor brief must pass"
+  set +e
+  out=$("$LINT" --brief "$dir/other.md" 2>&1); rc=$?
+  set -e
+  expect_code 0 "$rc" "a non-second-vendor brief is not blinding-constrained"
+  pass "brief blinding refuses a second-vendor brief referencing the primary report path"
+}
+
 test_repository_tree_lints_clean
 test_generator_is_idempotent_and_in_sync
 test_mutated_karpathy_block_fails_hash_check
@@ -162,3 +189,4 @@ test_dist_drift_is_detected
 test_budget_enforcement_flags_oversized_overlay
 test_duplicate_deliverable_contract_fails_lint
 test_missing_dist_file_fails_lint
+test_brief_blinding_refuses_primary_report_reference

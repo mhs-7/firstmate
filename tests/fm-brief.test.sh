@@ -708,6 +708,75 @@ test_scout_and_secondmate_scaffold() {
   pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
 }
 
+# The scaffold records a machine-readable "Role charter:" line mirroring the
+# "Delivery contract:" line, and names the assembled charter as a brief input so
+# staging delivers it. The hash it pins must equal the current dist bytes that
+# bin/fm-spawn.sh re-computes and validates.
+dist_sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$ROOT/roles/dist/$1.charter.md" | awk '{print $1}'
+  else
+    sha256sum "$ROOT/roles/dist/$1.charter.md" | awk '{print $1}'
+  fi
+}
+
+test_role_charter_line_records_dist_hash() {
+  local brief hash
+  hash=$(dist_sha256 implementer)
+  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-role-r1 alpha --mode no-mistakes --role implementer >/dev/null 2>&1 \
+    || fail "fm-brief.sh role scaffold exited non-zero"
+  brief="$BRIEF_HOME/data/brief-role-r1/brief.md"
+  assert_grep "Role charter: role=implementer date=2026-08-20 hash=$hash" "$brief" \
+    "ship brief must record the machine-readable Role charter line with the current dist hash"
+  assert_grep "Read your role charter first, before this task:" "$brief" \
+    "ship brief must name the edition-first role charter reference"
+  assert_grep "$ROOT/roles/dist/implementer.charter.md" "$brief" \
+    "ship brief must reference the assembled charter path so staging delivers it"
+  pass "fm-brief: role charter line records role/date/hash and names the charter input"
+}
+
+# The generated Skill workflow section must render the ratified routing table
+# (grill decisions 6-8 and 10): standing skills per role plus the ticket-class
+# additions, each naming its observable outcome artifact. Non-applicable skills
+# must not leak in.
+test_skill_workflow_table_per_class() {
+  local brief
+  scaffold_role_class() { # <role> <class> <id>
+    FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" "$3" alpha --mode no-mistakes \
+      --role "$1" --ticket-class "$2" >/dev/null 2>&1 || fail "scaffold $1/$2 exited non-zero"
+    brief="$BRIEF_HOME/data/$3/brief.md"
+  }
+  scaffold_role_class implementer standard sw-imp-std
+  assert_grep "implement/SKILL.md" "$brief" "implementer standing must include implement"
+  assert_grep "tdd/SKILL.md" "$brief" "implementer standing must include tdd"
+  assert_no_grep "diagnosing-bugs/SKILL.md" "$brief" "standard class must not add diagnosing-bugs"
+  scaffold_role_class implementer bug sw-imp-bug
+  assert_grep "diagnosing-bugs/SKILL.md" "$brief" "bug class must add diagnosing-bugs"
+  assert_grep "reproduced symptom" "$brief" "diagnosing-bugs line must name its reproduced-symptom artifact"
+  scaffold_role_class implementer interface sw-imp-int
+  assert_grep "codebase-design/SKILL.md" "$brief" "interface class must add codebase-design"
+  scaffold_role_class implementer unfamiliar-code sw-imp-unk
+  assert_grep "wayfinder/SKILL.md" "$brief" "unfamiliar-code class must add wayfinder"
+  scaffold_role_class implementer rebase sw-imp-rb
+  assert_grep "resolving-merge-conflicts/SKILL.md" "$brief" "rebase class must add resolving-merge-conflicts"
+  scaffold_role_class implementer deploy sw-imp-dep
+  assert_grep "deploy annex" "$brief" "deploy class must point at the deploy-annex charter variant"
+  scaffold_role_class scout design-spike sw-scout-ds
+  assert_grep "research/SKILL.md" "$brief" "scout standing must include research"
+  assert_grep "prototype/SKILL.md" "$brief" "scout design-spike must add prototype"
+  scaffold_role_class architect interface sw-arch-int
+  assert_grep "to-spec/SKILL.md" "$brief" "architect standing must include to-spec"
+  assert_grep "to-tickets/SKILL.md" "$brief" "architect standing must include to-tickets"
+  assert_grep "domain-modeling/SKILL.md" "$brief" "architect interface adds domain-modeling"
+  scaffold_role_class primary-reviewer standard sw-prev-std
+  assert_grep "code-review/SKILL.md" "$brief" "primary reviewer standing must include code-review"
+  assert_no_grep "improve-codebase-architecture" "$brief" "code-review ONLY, arch-deepening excluded"
+  scaffold_role_class second-vendor-reviewer bug sw-svr-bug
+  assert_grep "code-review/SKILL.md" "$brief" "second-vendor reviewer standing must include code-review"
+  assert_no_grep "diagnosing-bugs/SKILL.md" "$brief" "second-vendor reviewer must stay code-review ONLY"
+  pass "fm-brief: Skill workflow section renders the ratified role x class routing table"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -728,3 +797,5 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
+test_role_charter_line_records_dist_hash
+test_skill_workflow_table_per_class

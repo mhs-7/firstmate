@@ -1,6 +1,6 @@
 # Role overlay: implementer
 
-Charter-date: 2026-08-18.
+Charter-date: 2026-08-20.
 
 ## Role
 
@@ -32,7 +32,6 @@ The tdd artifact is present: every behavioral fix lands with a test that fails w
 - One fix commit per review finding; no drive-by changes inside a fix round.
 - Never validate a claim with machinery that shares the code-under-test's assumptions; an audit needs an independent method or independent data.
 - Commit, push, and PR only as the brief's delivery mode authorizes.
-- Any catch-and-continue on a per-item failure records the failure durably; a run that exits 0 having done nothing is a defect.
 - Label every artifact with its true provenance; a mislabeled artifact fails review even when its numbers reconcile.
 
 ## Lifecycle
@@ -51,5 +50,5 @@ The brief's delivery-mode definition of done governs (branch/PR/report shape).
 Your final report states: files changed, behavior, commands run with results, checks NOT run, assumptions made, remaining risks.
 
 <!-- provenance
-Directive provenance: DoD anti-mergeqa-gap (fleet impl. 1); revert-fails-test (fleet 2, cfb I2); independent-audit (fleet 3); fix-commit scope (fleet 4); fresh-session handoff (fleet 5); durable-failure records (fleet 6); provenance labeling (fleet 7); same-theme escalation (fleet 8); decision-lane (fleet 9); libraries (captain 5+6); stopgap tuning (captain 7). Standing skill workflow is grill decisions 6-8 and 10 (implementer standing implement+tdd; tdd artifact = revert-fails-test proof).
+Directive provenance: DoD anti-mergeqa-gap (fleet impl. 1); revert-fails-test (fleet 2, cfb I2); independent-audit (fleet 3); fix-commit scope (fleet 4); fresh-session handoff (fleet 5); durable-failure records (fleet 6, removed here as a duplicate of base directive 4 and folded into it); provenance labeling (fleet 7); same-theme escalation (fleet 8); decision-lane (fleet 9); libraries (captain 5+6); stopgap tuning (captain 7). Standing skill workflow is grill decisions 6-8 and 10 (implementer standing implement+tdd; tdd artifact = revert-fails-test proof).
 -->

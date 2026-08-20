@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# fm-roles-lint.sh - validate firstmate's role-charter tree.
+# fm-roles-lint.sh - validate firstmate's role-charter tree and brief-level
+# reviewer blinding.
 #
 # Usage:
 #   fm-roles-lint.sh                run every charter lint check
 #   fm-roles-lint.sh --soft <n>     assembled soft-cap word ceiling (warning below hard cap)
+#   fm-roles-lint.sh --brief <path> refuse a scaffolded brief whose role is
+#                                   second-vendor-reviewer if it references the
+#                                   primary review's report path, then exit
 #   fm-roles-lint.sh --help         print this usage
 #
 # The seven checks from the role-charter spec (c.2):
@@ -19,6 +23,14 @@
 #   5. Role names and role-mandate deliverable contracts are pairwise distinct.
 #   6. Every dist charter carries a Charter-date line.
 #   7. Dist files are in sync with sources: regeneration is clean.
+#
+# The --brief check enforces reviewer blinding (role-charter decision 3, spec
+# c.4.4): a second-vendor-reviewer brief must never name the primary review's
+# report path, so staging never delivers that report into the blinded seat. It
+# lives here rather than at brief scaffold time because the primary report path
+# appears in the {TASK} text firstmate fills after scaffolding; only a lint over
+# the completed brief can see it. Firstmate runs it before dispatching a
+# second-vendor review.
 #
 # Budget semantics: the byte-verbatim Karpathy block is a fixed, non-prunable
 # fixture controlled by the hash check, so the base budget counts only the
@@ -72,7 +84,7 @@ warn_check() {
 }
 
 usage() {
-  sed -n '2,16{s/^# \{0,1\}//;p;}' "$SELF_DIR/fm-roles-lint.sh"
+  sed -n '2,40{s/^# \{0,1\}//;p;}' "$SELF_DIR/fm-roles-lint.sh"
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -83,7 +95,26 @@ if [ "${1:-}" = "--soft" ]; then
   ASSEMBLED_SOFT="${2:?--soft needs a ceiling}"
   shift 2
 fi
-
+# --brief runs the reviewer-blinding check on one scaffolded brief and exits,
+# skipping the role-tree checks (which need the charter tree). A second-vendor
+# reviewer must be blinded from the primary review's report: a brief that names
+# the primary's report path (data/<id>/report.md) would stage that report into
+# the blinded seat, defeating the blinding.
+if [ "${1:-}" = "--brief" ]; then
+  BRIEF_TARGET="${2:?--brief needs a brief path}"
+  [ -e "$BRIEF_TARGET" ] || { echo "fm-roles-lint: error: --brief file not found: $BRIEF_TARGET" >&2; exit 2; }
+  BRIEF_ROLE=$(sed -n 's/^Role charter: role=\([^ ]*\).*$/\1/p' "$BRIEF_TARGET" | head -n 1)
+  if [ "$BRIEF_ROLE" != "second-vendor-reviewer" ]; then
+    echo "fm-roles-lint: ok (brief role '$BRIEF_ROLE' is not second-vendor-reviewer; no blinding constraint)"
+    exit 0
+  fi
+  if grep -Eq '(^|[^A-Za-z0-9_])data/[A-Za-z0-9._-]+/report\.md' "$BRIEF_TARGET"; then
+    echo "fm-roles-lint: FAIL: second-vendor-reviewer brief references the primary review's report path; the blinded seat must never receive the primary's report" >&2
+    exit 1
+  fi
+  echo "fm-roles-lint: ok (second-vendor-reviewer brief is blinded from the primary report path)"
+  exit 0
+fi
 sha256_stdin() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256

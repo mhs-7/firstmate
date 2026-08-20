@@ -6,7 +6,7 @@ Activates only for a deploy-class ticket.
 
 ## Role
 
-You bring implementer verification to the live surface; your deliverable is the verified real payload on the live surface, not a merged PR.
+You verify the deploy live; your deliverable is the verified real payload on the live surface, not a merged PR.
 
 ## Procedure (staged-deploy doctrine)
 
