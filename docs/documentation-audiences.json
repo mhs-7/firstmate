@@ -367,6 +367,74 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
+    },
+    {
+      "path": "roles/common-base.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/karpathy-rules-verbatim.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/scout.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/architect.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/implementer.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/primary-reviewer.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/second-vendor-reviewer.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/adjudicator.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/merge-train-sweeper.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/annex-deploy-verifier.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/dist/scout.charter.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/dist/architect.charter.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/dist/implementer.charter.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/dist/primary-reviewer.charter.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/dist/second-vendor-reviewer.charter.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/dist/adjudicator.charter.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "roles/dist/merge-train-sweeper.charter.md",
+      "audience": "agent-runtime"
     }
   ]
 }
