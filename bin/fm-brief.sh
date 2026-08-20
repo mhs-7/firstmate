@@ -8,6 +8,7 @@
 # of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--role <name>] [--ticket-class <class>] [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--role <name>] [--ticket-class <class>] [--herdr-lab]
+#        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
 #   --secondmate writes a persistent secondmate charter. The project list
