@@ -51,8 +51,8 @@ ROLE_SPECS=$(cat <<'EOF'
 scout|scout / researcher|Role|Standing skill workflow|Definition of done|Procedure|Boundaries
 architect|architect|Role|Standing skill workflow|Definition of done|Procedure|Boundaries
 implementer|implementer|Role|Standing skill workflow|Definition of done|Procedure|Boundaries|Output contract
-primary-reviewer|primary reviewer|Role|Standing skill workflow|Procedure|Boundaries
-second-vendor-reviewer|second-vendor reviewer|Role|Standing skill workflow|Independence contract|Procedure|Boundaries
+primary-reviewer|primary reviewer|Role|Standing skill workflow|Definition of done|Procedure|Boundaries
+second-vendor-reviewer|second-vendor reviewer|Role|Standing skill workflow|Definition of done|Independence contract|Procedure|Boundaries
 adjudicator|adjudicator|Role|Input contract|Procedure|Disposition vocabulary|Boundaries
 merge-train-sweeper|merge-train integration sweeper|Role|Object of review|Procedure|Boundaries
 EOF
@@ -83,6 +83,14 @@ if [ "${1:-}" = "--soft" ]; then
   ASSEMBLED_SOFT="${2:?--soft needs a ceiling}"
   shift 2
 fi
+
+sha256_stdin() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256
+  else
+    sha256sum
+  fi
+}
 
 # Keep trailing newlines pinned for byte-identical hashing.
 karpathy_block_from_dist() {
@@ -145,7 +153,7 @@ check_karpathy() {
   check_file_exists "$BASE_FILE"
   [ -e "$BASE_FILE" ] || return
   local base_hash
-  base_hash=$(karpathy_block_from_base "$BASE_FILE" | sha256sum | awk '{print $1}')
+  base_hash=$(karpathy_block_from_base "$BASE_FILE" | sha256_stdin | awk '{print $1}')
   if [ "$base_hash" != "$KARPATHY_PIN" ]; then
     fail_check "base Karpathy block hash $base_hash != pinned $KARPATHY_PIN"
   fi
@@ -156,7 +164,7 @@ check_karpathy() {
   local dist dist_hash
   for dist in "$DIST_DIR"/*.charter.md; do
     [ -e "$dist" ] || continue
-    dist_hash=$(karpathy_block_from_dist "$dist" | sha256sum | awk '{print $1}')
+    dist_hash=$(karpathy_block_from_dist "$dist" | sha256_stdin | awk '{print $1}')
     if [ "$dist_hash" != "$KARPATHY_PIN" ]; then
       fail_check "Karpathy block in $(basename "$dist") hash $dist_hash != pinned $KARPATHY_PIN"
     fi
@@ -183,9 +191,6 @@ EOF
 
 # --- check 3: word budgets --------------------------------------------------
 check_budgets() {
-  local tmp
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-roles-lint.XXXXXX")
-  trap 'rm -rf "$tmp"' RETURN
   local base_editable overlay_editable annex_editable assembled stem
   base_editable=$(strip_base_editable "$BASE_FILE" | word_count)
   if [ "$base_editable" -gt "$BASE_CEILING" ]; then
@@ -212,31 +217,36 @@ EOF
 }
 
 # --- check 4: no project-specific content -----------------------------------
+scan_project_content() {
+  local file=$1 hits bad
+  [ -e "$file" ] || return 0
+  hits=$(strip_sources "$file" | awk '
+    tolower($0) ~ /(^|[^a-z])cfb([^a-z]|$)/ ||
+    tolower($0) ~ /(^|[^a-z])kalshi([^a-z]|$)/ ||
+    tolower($0) ~ /(^|[^a-z])polymarket([^a-z]|$)/ ||
+    tolower($0) ~ /(^|[^a-z])uv([^a-z]|$)/ ||
+    tolower($0) ~ /(^|[^a-z])pytest([^a-z]|$)/
+  ')
+  if [ -n "$hits" ]; then
+    bad=$(printf '%s\n' "$hits" | head -1 | tr -s '[:space:]' ' ')
+    fail_check "project-specific content in $(basename "$file"): $bad"
+  fi
+}
+
 check_no_project_content() {
-  local tmp
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-roles-lint.XXXXXX")
-  trap 'rm -rf "$tmp"' RETURN
-  local file eff hits bad
-  for file in "$BASE_FILE" "$ANNEX_FILE"; do
-    eff="$tmp/$(basename "$file").eff"
-    strip_sources "$file" > "$eff"
-    hits=$(awk '
-      tolower($0) ~ /(^|[^a-z])cfb([^a-z]|$)/ ||
-      tolower($0) ~ /(^|[^a-z])kalshi([^a-z]|$)/ ||
-      tolower($0) ~ /(^|[^a-z])polymarket([^a-z]|$)/ ||
-      tolower($0) ~ /(^|[^a-z])uv([^a-z]|$)/ ||
-      tolower($0) ~ /(^|[^a-z])pytest([^a-z]|$)/
-    ' "$eff")
-    if [ -n "$hits" ]; then
-      bad=$(printf '%s\n' "$hits" | head -1 | tr -s '[:space:]' ' ')
-      fail_check "project-specific content in $(basename "$file"): $bad"
-    fi
-  done
+  local stem title rest
+  scan_project_content "$BASE_FILE"
+  scan_project_content "$ANNEX_FILE"
+  while IFS='|' read -r stem title rest; do
+    scan_project_content "$ROLES_DIR/$stem.md"
+  done <<EOF
+$ROLE_SPECS
+EOF
 }
 
 # --- check 5: pairwise-distinct roles/deliverables --------------------------
 check_distinct() {
-  local file role seen
+  local file stem title rest role deliverable seen
   seen=""
   while IFS='|' read -r stem title rest; do
     file="$ROLES_DIR/$stem.md"
@@ -247,11 +257,16 @@ check_distinct() {
     if [ "$role" != "$title" ]; then
       fail_check "$stem overlay H1 '$role' != expected '$title'"
     fi
-    if printf '%s\n' "$seen" | grep -qx "$role"; then
-      fail_check "duplicate role name: $role"
+    deliverable=$(sed -n 's/^Your deliverable is //p' "$file" | head -1 | tr -s '[:space:]' ' ')
+    if [ -z "$deliverable" ]; then
+      fail_check "$stem overlay has no 'Your deliverable is' contract sentence"
+      continue
+    fi
+    if printf '%s\n' "$seen" | grep -Fqx "$deliverable"; then
+      fail_check "$stem overlay duplicates another overlay's deliverable contract: '$deliverable'"
     fi
     seen="$seen
-$role"
+$deliverable"
   done <<EOF
 $ROLE_SPECS
 EOF
@@ -268,7 +283,7 @@ check_charter_date() {
 
 # --- check 7: dist in sync --------------------------------------------------
 check_dist_sync() {
-  local tmp dist stem
+  local tmp gen dist stem
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-roles-lint.XXXXXX")
   trap 'rm -rf "$tmp"' RETURN
   # Regenerate with the single generator authority and diff against committed.
@@ -276,11 +291,21 @@ check_dist_sync() {
     fail_check "generator failed during dist-sync check"
     return
   fi
+  for gen in "$tmp"/*.charter.md; do
+    [ -e "$gen" ] || continue
+    stem=$(basename "$gen" .charter.md)
+    dist="$DIST_DIR/$stem.charter.md"
+    if [ ! -e "$dist" ]; then
+      fail_check "missing committed dist file: $stem.charter.md (run bin/fm-roles-gen.sh)"
+    elif ! cmp -s "$dist" "$gen"; then
+      fail_check "dist out of sync with sources: $stem.charter.md (run bin/fm-roles-gen.sh)"
+    fi
+  done
   for dist in "$DIST_DIR"/*.charter.md; do
     [ -e "$dist" ] || continue
     stem=$(basename "$dist" .charter.md)
-    if ! cmp -s "$dist" "$tmp/$stem.charter.md"; then
-      fail_check "dist out of sync with sources: $stem.charter.md (run bin/fm-roles-gen.sh)"
+    if [ ! -e "$tmp/$stem.charter.md" ]; then
+      fail_check "unexpected dist file with no source: $stem.charter.md"
     fi
   done
 }

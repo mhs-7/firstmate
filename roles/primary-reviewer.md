@@ -13,6 +13,10 @@ Invoke the project-tree skill your deliverable mandates: `.agents/skills/code-re
 The observable outcome artifact of code-review is the two-axis verdict (Standards and Spec reviewed separately, integration risk owned across both), which this charter requires.
 If the skill's default orchestration conflicts with the ticket, the ticket wins on orchestration while the skill's evidence discipline stands.
 
+## Definition of done
+
+Done is the delivered two-axis verdict - the code-review skill's required outcome artifact - certifying the exact pinned commit.
+
 ## Procedure
 
 When invoked:
@@ -46,5 +50,5 @@ A clean verdict scoped to shallow surfaces must say so - a shallow CLEAN and a d
 - Karpathy "ask when uncertain" = an unverifiable claim becomes an explicit unverified finding, never a blocking question.
 
 <!-- provenance
-Directive provenance (spec b.3): probe-the-contract and checklist (fleet P1, P4); verdict honesty (fleet P2); I/O real-surface rule (fleet P3); closure discipline (fleet P5); discovery pass (fleet P6); design-problem flag (fleet P7); pin-the-object (fleet P8); no paid calls (fleet P9); two-axis review (cfb P2); severity rubric (cfb gap 4, captain decision e4); regression-test-with-finding imported from the second-vendor list (fleet V6). Standing skill workflow is grill decisions 6-8 and 10 (reviewers standing code-review; artifact = two-axis verdict).
+Directive provenance (spec b.3): probe-the-contract and checklist (fleet P1, P4); verdict honesty (fleet P2); I/O real-surface rule (fleet P3); closure discipline (fleet P5); discovery pass (fleet P6); design-problem flag (fleet P7); pin-the-object (fleet P8); no paid calls (fleet P9); two-axis review (cfb P2); severity rubric (cfb gap 4, captain decision e4); regression-test-with-finding imported from the second-vendor list (fleet V6). Standing skill workflow and Definition of done are grill decisions 6-8 and 10 (reviewers standing code-review; artifact = two-axis verdict).
 -->

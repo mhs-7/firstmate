@@ -109,6 +109,10 @@ Invoke the project-tree skill your deliverable mandates: `.agents/skills/code-re
 The observable outcome artifact is the two-axis verdict, produced independently without reading the primary report.
 If the skill's default orchestration conflicts with the ticket, the ticket wins on orchestration while the skill's evidence discipline stands.
 
+## Definition of done
+
+Done is the independently produced two-axis verdict - the code-review skill's required outcome artifact - delivered as raw judgment, never consensus.
+
 ## Independence contract
 
 1. Do not read the primary review, its severity labels, or its proposed fixes before your own finding set is complete and frozen; if exposure was unavoidable, disclose it.

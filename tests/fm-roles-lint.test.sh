@@ -32,6 +32,17 @@ run_lint() {
   ( cd "$scratch" && ./bin/fm-roles-lint.sh "$@" ) 2>&1
 }
 
+# hash_dist <scratch>: sorted content hashes of the scratch dist charters.
+hash_dist() {
+  ( cd "$1" && {
+      if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 roles/dist/*.charter.md
+      else
+        sha256sum roles/dist/*.charter.md
+      fi
+    } | awk '{print $1}' | sort )
+}
+
 test_repository_tree_lints_clean() {
   local scratch out rc
   make_scratch scratch
@@ -49,11 +60,11 @@ test_generator_is_idempotent_and_in_sync() {
   make_scratch scratch
   # Snapshot the committed dist (the scratch copy holds it), regenerate twice,
   # and confirm both regenerations equal the committed dist.
-  ( cd "$scratch" && sha256sum roles/dist/*.charter.md | awk '{print $1}' | sort ) > "$scratch/committed"
+  hash_dist "$scratch" > "$scratch/committed"
   ( cd "$scratch" && ./bin/fm-roles-gen.sh ) >/dev/null
-  ( cd "$scratch" && sha256sum roles/dist/*.charter.md | awk '{print $1}' | sort ) > "$scratch/run1"
+  hash_dist "$scratch" > "$scratch/run1"
   ( cd "$scratch" && ./bin/fm-roles-gen.sh ) >/dev/null
-  ( cd "$scratch" && sha256sum roles/dist/*.charter.md | awk '{print $1}' | sort ) > "$scratch/run2"
+  hash_dist "$scratch" > "$scratch/run2"
   cmp -s "$scratch/committed" "$scratch/run1" || fail "regeneration diverged from committed dist"
   cmp -s "$scratch/run1" "$scratch/run2" || fail "generator is not idempotent"
   pass "generator is idempotent and matches committed dist"
@@ -62,7 +73,8 @@ test_generator_is_idempotent_and_in_sync() {
 test_mutated_karpathy_block_fails_hash_check() {
   local scratch out rc
   make_scratch scratch
-  sed -i '' 's/Behavioral guidelines/Behavioral GUIDELINES/' "$scratch/roles/common-base.md"
+  sed -i.bak 's/Behavioral guidelines/Behavioral GUIDELINES/' "$scratch/roles/common-base.md"
+  rm -f "$scratch/roles/common-base.md.bak"
   set +e
   out=$(run_lint "$scratch")
   rc=$?
@@ -106,8 +118,47 @@ PY
   pass "budget enforcement flags an oversized overlay"
 }
 
+test_duplicate_deliverable_contract_fails_lint() {
+  local scratch out rc
+  make_scratch scratch
+  # Give the architect overlay the scout's exact deliverable sentence, then
+  # regenerate dist so only the distinctness check can fire.
+  python3 - "$scratch/roles/scout.md" "$scratch/roles/architect.md" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+sentence = next(l for l in open(src) if l.startswith("Your deliverable is "))
+lines = open(dst).readlines()
+open(dst, "w").writelines(
+    sentence if l.startswith("Your deliverable is ") else l for l in lines
+)
+PY
+  ( cd "$scratch" && ./bin/fm-roles-gen.sh ) >/dev/null
+  set +e
+  out=$(run_lint "$scratch")
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "duplicate deliverable contracts must fail lint"
+  assert_contains "$out" "deliverable contract" "failure should name the deliverable contract"
+  pass "duplicate deliverable contracts are caught"
+}
+
+test_missing_dist_file_fails_lint() {
+  local scratch out rc
+  make_scratch scratch
+  rm "$scratch/roles/dist/scout.charter.md"
+  set +e
+  out=$(run_lint "$scratch")
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "deleted committed dist charter must fail lint"
+  assert_contains "$out" "missing committed dist file" "failure should name the missing dist file"
+  pass "missing committed dist charter is detected"
+}
+
 test_repository_tree_lints_clean
 test_generator_is_idempotent_and_in_sync
 test_mutated_karpathy_block_fails_hash_check
 test_dist_drift_is_detected
 test_budget_enforcement_flags_oversized_overlay
+test_duplicate_deliverable_contract_fails_lint
+test_missing_dist_file_fails_lint

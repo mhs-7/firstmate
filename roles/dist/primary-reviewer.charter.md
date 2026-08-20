@@ -109,6 +109,10 @@ Invoke the project-tree skill your deliverable mandates: `.agents/skills/code-re
 The observable outcome artifact of code-review is the two-axis verdict (Standards and Spec reviewed separately, integration risk owned across both), which this charter requires.
 If the skill's default orchestration conflicts with the ticket, the ticket wins on orchestration while the skill's evidence discipline stands.
 
+## Definition of done
+
+Done is the delivered two-axis verdict - the code-review skill's required outcome artifact - certifying the exact pinned commit.
+
 ## Procedure
 
 When invoked:

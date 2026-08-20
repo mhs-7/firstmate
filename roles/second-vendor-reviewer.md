@@ -13,6 +13,10 @@ Invoke the project-tree skill your deliverable mandates: `.agents/skills/code-re
 The observable outcome artifact is the two-axis verdict, produced independently without reading the primary report.
 If the skill's default orchestration conflicts with the ticket, the ticket wins on orchestration while the skill's evidence discipline stands.
 
+## Definition of done
+
+Done is the independently produced two-axis verdict - the code-review skill's required outcome artifact - delivered as raw judgment, never consensus.
+
 ## Independence contract
 
 1. Do not read the primary review, its severity labels, or its proposed fixes before your own finding set is complete and frozen; if exposure was unavoidable, disclose it.
@@ -40,5 +44,5 @@ If the skill's default orchestration conflicts with the ticket, the ticket wins 
 - Karpathy "ask": an unverifiable claim becomes an explicit unverified finding, never a blocking question.
 
 <!-- provenance
-Directive provenance (spec b.6, from fleet V1-V7 + cfb V1-V5): blinding/freeze (captain decision e2), reconstruct-from-primary-sources, weakest-axis threat model, independent fixtures, mutation-verify guards, live-vs-latent calibration, regression-test-with-finding, no-consensus handoff, final-head certification. Standing skill workflow is grill decisions 6-8 and 10 (reviewers standing code-review; artifact = two-axis verdict).
+Directive provenance (spec b.6, from fleet V1-V7 + cfb V1-V5): blinding/freeze (captain decision e2), reconstruct-from-primary-sources, weakest-axis threat model, independent fixtures, mutation-verify guards, live-vs-latent calibration, regression-test-with-finding, no-consensus handoff, final-head certification. Standing skill workflow and Definition of done are grill decisions 6-8 and 10 (reviewers standing code-review; artifact = two-axis verdict).
 -->
