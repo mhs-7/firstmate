@@ -24,6 +24,16 @@ jobs:
       # re-spell the shellcheck command here; keep CI and the pre-push gate on it.
       - run: bin/fm-lint.sh
 
+  roles-lint:
+    name: Lint role charters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Single owner of the charter lint definition (Karpathy hash, headings,
+      # budgets, heuristic, distinctness, Charter-date, dist sync). Standalone
+      # because bin/fm-lint.sh is the shell-lint owner, not this content lint.
+      - run: bin/fm-roles-lint.sh
+
   # Deterministic proof that portable parallel shards + portable serial + Herdr
   # equal the complete tests/*.test.sh inventory with no missing or duplicates,
   # and that the portable serial CI shards partition that serial lane exactly.
