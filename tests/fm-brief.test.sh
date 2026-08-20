@@ -721,12 +721,13 @@ dist_sha256() {
 }
 
 test_role_charter_line_records_dist_hash() {
-  local brief hash
+  local brief hash charter_date
   hash=$(dist_sha256 implementer)
+  charter_date=$(sed -n 's/^Charter-date: //p' "$ROOT/roles/dist/implementer.charter.md" | head -n 1 | sed 's/[.]$//')
   FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-role-r1 alpha --mode no-mistakes --role implementer >/dev/null 2>&1 \
     || fail "fm-brief.sh role scaffold exited non-zero"
   brief="$BRIEF_HOME/data/brief-role-r1/brief.md"
-  assert_grep "Role charter: role=implementer date=2026-08-20 hash=$hash" "$brief" \
+  assert_grep "Role charter: role=implementer date=$charter_date hash=$hash" "$brief" \
     "ship brief must record the machine-readable Role charter line with the current dist hash"
   assert_grep "Read your role charter first, before this task:" "$brief" \
     "ship brief must name the edition-first role charter reference"

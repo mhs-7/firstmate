@@ -84,7 +84,7 @@ warn_check() {
 }
 
 usage() {
-  sed -n '2,40{s/^# \{0,1\}//;p;}' "$SELF_DIR/fm-roles-lint.sh"
+  awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$SELF_DIR/fm-roles-lint.sh"
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -99,7 +99,10 @@ fi
 # skipping the role-tree checks (which need the charter tree). A second-vendor
 # reviewer must be blinded from the primary review's report: a brief that names
 # the primary's report path (data/<id>/report.md) would stage that report into
-# the blinded seat, defeating the blinding.
+# the blinded seat, defeating the blinding. The brief's OWN report path is its
+# deliverable, not a leak: every scout scaffold's Definition of done names
+# data/<own-id>/report.md, so a brief living at data/<id>/brief.md is exempt
+# for that one id and refused only for a different id's report path.
 if [ "${1:-}" = "--brief" ]; then
   BRIEF_TARGET="${2:?--brief needs a brief path}"
   [ -e "$BRIEF_TARGET" ] || { echo "fm-roles-lint: error: --brief file not found: $BRIEF_TARGET" >&2; exit 2; }
@@ -108,8 +111,17 @@ if [ "${1:-}" = "--brief" ]; then
     echo "fm-roles-lint: ok (brief role '$BRIEF_ROLE' is not second-vendor-reviewer; no blinding constraint)"
     exit 0
   fi
-  if grep -Eq '(^|[^A-Za-z0-9_])data/[A-Za-z0-9._-]+/report\.md' "$BRIEF_TARGET"; then
-    echo "fm-roles-lint: FAIL: second-vendor-reviewer brief references the primary review's report path; the blinded seat must never receive the primary's report" >&2
+  BRIEF_OWN_ID=""
+  if [ "$(basename "$BRIEF_TARGET")" = "brief.md" ] \
+    && [ "$(basename "$(dirname "$(dirname "$BRIEF_TARGET")")")" = "data" ]; then
+    BRIEF_OWN_ID=$(basename "$(dirname "$BRIEF_TARGET")")
+  fi
+  LEAKED_IDS=$(grep -Eo '(^|[^A-Za-z0-9_])data/[A-Za-z0-9._-]+/report\.md' "$BRIEF_TARGET" \
+    | sed -E 's|^.*data/([A-Za-z0-9._-]+)/report\.md$|\1|' \
+    | sort -u | grep -Fxv -- "$BRIEF_OWN_ID" || true)
+  if [ -n "$LEAKED_IDS" ]; then
+    LEAKED_FIRST=$(printf '%s\n' "$LEAKED_IDS" | head -n 1)
+    echo "fm-roles-lint: FAIL: second-vendor-reviewer brief references the primary review's report path (data/$LEAKED_FIRST/report.md); the blinded seat must never receive the primary's report" >&2
     exit 1
   fi
   echo "fm-roles-lint: ok (second-vendor-reviewer brief is blinded from the primary report path)"
