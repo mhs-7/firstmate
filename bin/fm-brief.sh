@@ -6,8 +6,8 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--role <name>] [--ticket-class <class>] [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--role <name>] [--ticket-class <class>] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -45,6 +45,26 @@
 # report rather than a merge, and a charter is not a delivery contract.
 # There is no --yolo flag here. The worker never owns approval decisions, so yolo is
 # a spawn-time and firstmate-side input only (AGENTS.md section 7).
+# A ship or scout brief carries a role axis and a ticket class, both resolved at
+# intake like delivery mode (AGENTS.md section 7, role-charter decisions 6 and 10):
+#   --role <name>  the role charter governing the worker; default implementer for
+#                  ship and scout for --scout. Valid: implementer, scout, architect,
+#                  primary-reviewer, second-vendor-reviewer. Unknown names are
+#                  refused loudly rather than silently scaffolding an unowned role.
+#   --ticket-class <class>  the skill-workflow routing class; default standard.
+#                  Valid: bug, interface, unfamiliar-code, rebase, deploy,
+#                  design-spike, standard. Each role x class emits a generated
+#                  "Skill workflow" section naming the project-tree skills the
+#                  ticket mandates and their observable outcome artifacts, per the
+#                  ratified routing table; the section is how firstmate's intake
+#                  decision reaches the worker side by side with the charter.
+# The brief names the assembled charter at roles/dist/<role>.charter.md as an input
+# near the top (read your role charter first), so bin/fm-spawn.sh stages it into the
+# worker's checkout exactly like any other firstmate reference. The scaffold also
+# records a fixed machine-readable "Role charter: role=<role> date=<date> hash=<hash>"
+# line mirroring the "Delivery contract:" pattern; bin/fm-spawn.sh validates that
+# hash against the current dist file and refuses a mismatch (charter changed between
+# scaffold and spawn), so brief and recorded charter cannot drift.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
@@ -106,6 +126,10 @@ HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
+ROLE=
+ROLE_SET=0
+TICKET_CLASS=
+TICKET_CLASS_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -115,6 +139,8 @@ for a in "$@"; do
     esac
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
+      role) ROLE=$a; ROLE_SET=1 ;;
+      ticket-class) TICKET_CLASS=$a; TICKET_CLASS_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -127,6 +153,10 @@ for a in "$@"; do
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
+    --role) want_value=role ;;
+    --role=*) ROLE=${a#--role=}; ROLE_SET=1 ;;
+    --ticket-class) want_value=ticket-class ;;
+    --ticket-class=*) TICKET_CLASS=${a#--ticket-class=}; TICKET_CLASS_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's approval authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -154,6 +184,31 @@ elif [ "$MODE_SET" -eq 1 ]; then
   echo "error: --mode applies only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
   exit 1
 fi
+# A role axis and a ticket class govern the charter and skill-workflow section,
+# resolved at intake like delivery mode. They apply to ship and scout briefs
+# only; a secondmate charter is a persistent home identity, never a role.
+if [ "$KIND" = secondmate ] && { [ "$ROLE_SET" -eq 1 ] || [ "$TICKET_CLASS_SET" -eq 1 ]; }; then
+  echo "error: --role and --ticket-class apply only to crewmate ship or scout briefs; a secondmate charter is a persistent home identity, not a role" >&2
+  exit 1
+fi
+# Default role follows the deliverable kind; unknown roles are refused loudly
+# rather than scaffolding an unowned charter.
+if [ "$ROLE_SET" -eq 0 ]; then
+  if [ "$KIND" = ship ]; then
+    ROLE=implementer
+  else
+    ROLE=scout
+  fi
+fi
+case "$ROLE" in
+  implementer|scout|architect|primary-reviewer|second-vendor-reviewer) ;;
+  *) echo "error: --role must be one of implementer, scout, architect, primary-reviewer, second-vendor-reviewer (got '$ROLE')" >&2; exit 1 ;;
+esac
+TICKET_CLASS=${TICKET_CLASS:-standard}
+case "$TICKET_CLASS" in
+  bug|interface|unfamiliar-code|rebase|deploy|design-spike|standard) ;;
+  *) echo "error: --ticket-class must be one of bug, interface, unfamiliar-code, rebase, deploy, design-spike, standard (got '$TICKET_CLASS')" >&2; exit 1 ;;
+esac
 ID=${POS[0]}
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
@@ -170,6 +225,111 @@ BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
 mkdir -p "$DATA/$ID"
 
+# --- Role charter resolution ---
+# The assembled charter for this task's role is a firstmate reference that the
+# brief names near the top so bin/fm-spawn.sh stages it into the worker's
+# checkout like any other firstmate input. The scaffold binds the current dist
+# bytes as the "Role charter:" machine line; fm-spawn.sh validates that hash
+# against the dist file at spawn time, so a charter edited between scaffold and
+# spawn is refused instead of silently shipped.
+CHARTER_FILE="$FM_ROOT/roles/dist/$ROLE.charter.md"
+CHARTER_HASH=
+CHARTER_DATE=
+if [ ! -e "$CHARTER_FILE" ]; then
+  # A foreign or minimal firstmate root (e.g. a path-quoting test fixture) may
+  # lack the assembled charters. Warn and scaffold without a pinned role line:
+  # the worker still gets the task and skill workflow, and bin/fm-spawn.sh's
+  # back-compat path treats the absent line as a pre-charter brief.
+  echo "warning: no assembled charter for role '$ROLE' at $CHARTER_FILE; omitting the Role charter line (run bin/fm-roles-gen.sh to scaffold charter-pinned briefs)" >&2
+else
+  if command -v shasum >/dev/null 2>&1; then
+    CHARTER_HASH=$(shasum -a 256 "$CHARTER_FILE" | awk '{print $1}')
+  else
+    CHARTER_HASH=$(sha256sum "$CHARTER_FILE" | awk '{print $1}')
+  fi
+  CHARTER_DATE=$(sed -n 's/^Charter-date: //p' "$CHARTER_FILE" | head -n 1 | sed 's/[.]$//')
+  if [ -z "$CHARTER_DATE" ]; then
+    echo "error: charter $CHARTER_FILE carries no Charter-date line" >&2
+    exit 1
+  fi
+fi
+if [ -n "$CHARTER_HASH" ]; then
+  ROLE_LINE="Role charter: role=$ROLE date=$CHARTER_DATE hash=$CHARTER_HASH"
+  ROLE_REF="Read your role charter first, before this task: \`$CHARTER_FILE\`"
+else
+  ROLE_LINE=""
+  ROLE_REF=""
+fi
+
+# --- Skill workflow section ---
+# Generated from role x ticket class per the ratified routing table (grill
+# decisions 6-8 and 10). Standing skills name the role's deliverable mandates;
+# the ticket class adds the class-specific skills. Every line names the skill by
+# project-tree path and its observable outcome artifact Definition of done checks.
+build_skill_workflow() {
+  local role=$1 class=$2
+  SKILL_WORKFLOW=""
+  case "$role" in
+    implementer)
+      IFS= read -r -d '' SKILL_WORKFLOW <<EOF || true
+# Skill workflow
+Role: implementer (charter read first). Invoke the project-tree skills this ticket mandates before diverging from them; each observable outcome artifact below is checked by Definition of done:
+- \`.agents/skills/implement/SKILL.md\` - implement the accepted change; observable artifact: the accepted landed change.
+- \`.agents/skills/tdd/SKILL.md\` - test-first red-to-green; observable artifact: revert-fails-test proof.
+EOF
+      case "$class" in
+        bug)
+          SKILL_WORKFLOW+="- \`.agents/skills/diagnosing-bugs/SKILL.md\` - reproduce the exact symptom before theorizing; observable artifact: reproduced symptom."$'\n' ;;
+        interface)
+          SKILL_WORKFLOW+="- \`.agents/skills/codebase-design/SKILL.md\` - design the seam before touching code; observable artifact: named seam with the deepening decision."$'\n' ;;
+        unfamiliar-code)
+          SKILL_WORKFLOW+="- \`.agents/skills/wayfinder/SKILL.md\` - map the unfamiliar surface before editing; observable artifact: orientation map of the unfamiliar code."$'\n' ;;
+        rebase)
+          SKILL_WORKFLOW+="- \`.agents/skills/resolving-merge-conflicts/SKILL.md\` - resolve the conflicting merge or rebase cleanly; observable artifact: clean resolution of the conflicting merge/rebase."$'\n' ;;
+        deploy)
+          SKILL_WORKFLOW+="- deploy annex (in your role charter) - staged-deploy doctrine; observable artifact: the verified live payload, not the merged PR."$'\n' ;;
+      esac
+      ;;
+    scout)
+      IFS= read -r -d '' SKILL_WORKFLOW <<EOF || true
+# Skill workflow
+Role: scout / researcher (charter read first). Invoke the project-tree skills this ticket mandates before diverging from them; the observable outcome artifact below is checked by Definition of done:
+- \`.agents/skills/research/SKILL.md\` - primary-source evidence standard; observable artifact: labeled evidence report (CONFIRMED/WATCHLIST with file:line citations).
+EOF
+      if [ "$class" = design-spike ]; then
+        SKILL_WORKFLOW+="- \`.agents/skills/prototype/SKILL.md\` - build a throwaway prototype to answer the design question; observable artifact: the prototype answering the design question."$'\n'
+      fi
+      ;;
+    architect)
+      IFS= read -r -d '' SKILL_WORKFLOW <<EOF || true
+# Skill workflow
+Role: architect (charter read first). Invoke the project-tree skills this ticket mandates before diverging from them; each observable outcome artifact below is checked by Definition of done:
+- \`.agents/skills/to-spec/SKILL.md\` - synthesize the design into a spec; observable artifact: the spec.
+- \`.agents/skills/to-tickets/SKILL.md\` - break the design into tracer-bullet vertical tickets; observable artifact: the ticket graph.
+EOF
+      case "$class" in
+        bug|interface|unfamiliar-code|rebase)
+          SKILL_WORKFLOW+="- \`.agents/skills/codebase-design/SKILL.md\` - design the seam; observable artifact: named seam with the deepening decision."$'\n'
+          SKILL_WORKFLOW+="- \`.agents/skills/domain-modeling/SKILL.md\` - pin the domain terms; observable artifact: the domain terms / ubiquitous language."$'\n'
+          SKILL_WORKFLOW+="- \`.agents/skills/wayfinder/SKILL.md\` - map the unfamiliar surface (large efforts); observable artifact: orientation map of the unfamiliar code."$'\n' ;;
+        design-spike)
+          SKILL_WORKFLOW+="- \`.agents/skills/prototype/SKILL.md\` - build a throwaway prototype to answer the design question; observable artifact: the prototype answering the design question."$'\n' ;;
+      esac
+      ;;
+    primary-reviewer|second-vendor-reviewer)
+      IFS= read -r -d '' SKILL_WORKFLOW <<EOF || true
+# Skill workflow
+Role: $role (charter read first). Invoke the project-tree skill this ticket mandates before diverging from it; the observable outcome artifact below is checked by Definition of done:
+- \`.agents/skills/code-review/SKILL.md\` - the two-axis review evidence rules; observable artifact: two-axis verdict.
+EOF
+      # Reviewers run code-review ONLY; class additions are deliberately empty
+      # and improve-codebase-architecture stays out (it belongs to dedicated
+      # arch-deepening tickets, grill decision 11).
+      ;;
+  esac
+  SKILL_WORKFLOW=${SKILL_WORKFLOW%$'\n'}
+}
+build_skill_workflow "$ROLE" "$TICKET_CLASS"
 shell_quote() {
   printf "'"
   printf '%s' "$1" | sed "s/'/'\\\\''/g"
@@ -301,16 +461,23 @@ if [ "$KIND" = scout ]; then
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
+$ROLE_REF
+
+$ROLE_LINE
+
 # Task
 {TASK}
 
 $HERDR_SECTION
+
+$SKILL_WORKFLOW
 
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
 The report is the only thing that survives, so anything worth keeping must be in it.
+
 
 # Rules
 1. Never push to any remote and never open a PR.
@@ -341,7 +508,7 @@ Before reporting done, read and follow \`$FM_ROOT/.agents/skills/decision-hold-l
 When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
-echo "scaffolded: $BRIEF (scout; replace {TASK})"
+echo "scaffolded: $BRIEF (scout, role=$ROLE, ticket-class=$TICKET_CLASS; replace {TASK})"
 exit 0
 fi
 
@@ -410,10 +577,16 @@ DOD=${DOD%$'\n'}
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
+$ROLE_REF
+
+$ROLE_LINE
+
 # Task
 {TASK}
 
 $HERDR_SECTION
+
+$SKILL_WORKFLOW
 
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
@@ -458,4 +631,4 @@ Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced 
 
 $DOD
 EOF
-echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK})"
+echo "scaffolded: $BRIEF (ship, role=$ROLE, ticket-class=$TICKET_CLASS, mode=$MODE; replace {TASK})"

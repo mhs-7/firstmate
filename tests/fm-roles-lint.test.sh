@@ -155,6 +155,57 @@ test_missing_dist_file_fails_lint() {
   pass "missing committed dist charter is detected"
 }
 
+# The --brief reviewer-blinding check (role-charter decision 3, spec c.4.4):
+# a second-vendor-reviewer brief that references the primary review's report
+# path must be refused so staging never delivers that report into the blinded
+# seat; a second-vendor brief without it, and any other role's brief, pass.
+test_brief_blinding_refuses_primary_report_reference() {
+  local dir out rc
+  dir=$(fm_test_tmproot "fm-roles-blinding")
+  mkdir -p "$dir"
+  printf 'Role charter: role=second-vendor-reviewer date=2026-08-20 hash=abc\n# Task\nPrimary report: data/primary-z9/report.md\n' > "$dir/bad.md"
+  printf 'Role charter: role=second-vendor-reviewer date=2026-08-20 hash=abc\n# Task\nReview independently.\n' > "$dir/good.md"
+  printf 'Role charter: role=implementer date=2026-08-20 hash=abc\n# Task\nUse data/primary-z9/report.md\n' > "$dir/other.md"
+  set +e
+  out=$("$LINT" --brief "$dir/bad.md" 2>&1); rc=$?
+  set -e
+  expect_code 1 "$rc" "second-vendor brief naming the primary report path must be refused"
+  assert_contains "$out" "primary review's report path" "refusal must name the report path violation"
+  set +e
+  out=$("$LINT" --brief "$dir/good.md" 2>&1); rc=$?
+  set -e
+  expect_code 0 "$rc" "a blinded second-vendor brief must pass"
+  set +e
+  out=$("$LINT" --brief "$dir/other.md" 2>&1); rc=$?
+  set -e
+  expect_code 0 "$rc" "a non-second-vendor brief is not blinding-constrained"
+  pass "brief blinding refuses a second-vendor brief referencing the primary report path"
+}
+
+# A real scaffolded second-vendor brief names its OWN report path in the
+# Definition of done; the blinding check must exempt that one id (derived from
+# the brief's data/<id>/brief.md location) and refuse only a different task's
+# report path.
+test_brief_blinding_exempts_own_report_path() {
+  local home brief out rc
+  home=$(fm_test_tmproot "fm-roles-blinding-own")/home
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" svr-own-r1 alpha --scout --role second-vendor-reviewer >/dev/null 2>&1 \
+    || fail "fm-brief.sh second-vendor scout scaffold exited non-zero"
+  brief="$home/data/svr-own-r1/brief.md"
+  set +e
+  out=$("$LINT" --brief "$brief" 2>&1); rc=$?
+  set -e
+  expect_code 0 "$rc" "a pristine scaffolded second-vendor brief must pass the blinding check (got: $out)"
+  printf 'Compare with data/primary-z9/report.md\n' >> "$brief"
+  set +e
+  out=$("$LINT" --brief "$brief" 2>&1); rc=$?
+  set -e
+  expect_code 1 "$rc" "the same brief naming another task's report path must be refused"
+  assert_contains "$out" "primary-z9" "refusal must name the leaked report id"
+  pass "brief blinding exempts the brief's own report path and refuses others"
+}
+
 test_repository_tree_lints_clean
 test_generator_is_idempotent_and_in_sync
 test_mutated_karpathy_block_fails_hash_check
@@ -162,3 +213,5 @@ test_dist_drift_is_detected
 test_budget_enforcement_flags_oversized_overlay
 test_duplicate_deliverable_contract_fails_lint
 test_missing_dist_file_fails_lint
+test_brief_blinding_refuses_primary_report_reference
+test_brief_blinding_exempts_own_report_path

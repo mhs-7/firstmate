@@ -1303,6 +1303,41 @@ if [ "$KIND" = ship ]; then
   fi
 fi
 
+# Brief/spawn role-charter agreement, checked in the same pass as delivery.
+# fm-brief.sh records a ship/scout brief's role as a fixed "Role charter:
+# role=<name> date=<date> hash=<hash>" line and names the charter so staging
+# delivers it. The spawn verifies the recorded hash against the current dist
+# file: a mismatch means the charter changed between scaffold and spawn, so the
+# worker would run under charter text the task record does not pin - refuse and
+# re-scaffold, exactly parallel to the delivery-mode mismatch refusal. A brief
+# with no role line (scaffolded before role charters recorded one) warns once
+# and launches, mirroring the delivery-mode back-compat behavior.
+ROLE_DIST=
+CHARTER_DIST_HASH=
+if [ "$KIND" != secondmate ]; then
+  ROLE_INFO=$(sed -n 's/^Role charter: role=\([^ ]*\) date=\([^ ]*\) hash=\([^ ]*\).*$/\1|\2|\3/p' "$BRIEF" | head -n 1)
+  if [ -z "$ROLE_INFO" ]; then
+    echo "warning: $BRIEF records no role charter line (scaffolded before role charters recorded one); launching without a pinned role charter - confirm the worker's role instructions are covered by the brief" >&2
+  else
+    ROLE_DIST=${ROLE_INFO%%|*}
+    CHARTER_DIST_HASH=${ROLE_INFO##*|}
+    CHARTER_FILE="$FM_ROOT/roles/dist/$ROLE_DIST.charter.md"
+    if [ ! -e "$CHARTER_FILE" ]; then
+      echo "error: no assembled charter for role '$ROLE_DIST' at $CHARTER_FILE; run bin/fm-roles-gen.sh" >&2
+      exit 1
+    fi
+    if command -v shasum >/dev/null 2>&1; then
+      CURRENT_HASH=$(shasum -a 256 "$CHARTER_FILE" | awk '{print $1}')
+    else
+      CURRENT_HASH=$(sha256sum "$CHARTER_FILE" | awk '{print $1}')
+    fi
+    if [ "$CHARTER_DIST_HASH" != "$CURRENT_HASH" ]; then
+      echo "error: role charter mismatch for $ID: the brief pins $ROLE_DIST hash=$CHARTER_DIST_HASH but the current roles/dist/$ROLE_DIST.charter.md is hash=$CURRENT_HASH; the charter changed between scaffold and spawn - re-scaffold the brief so the worker runs the charter the task record pins" >&2
+      exit 1
+    fi
+  fi
+fi
+
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
@@ -2788,6 +2823,8 @@ META_WINDOW=$T
   echo "kind=$KIND"
   [ -z "$MODE" ] || echo "mode=$MODE"
   [ -z "$YOLO" ] || echo "yolo=$YOLO"
+  [ -z "$ROLE_DIST" ] || echo "role=$ROLE_DIST"
+  [ -z "$CHARTER_DIST_HASH" ] || echo "charter_hash=$CHARTER_DIST_HASH"
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"

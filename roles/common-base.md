@@ -1,6 +1,6 @@
 # Firstmate role charter - common base
 
-Charter-date: 2026-08-18.
+Charter-date: 2026-08-20.
 Every rule here traces to an observed failure or a captain directive; sources live in the private `fm-roles-*` fleet reports.
 Prune rule: when a supervision review attributes a failure to this charter, re-test each line with "would removing this cause a mistake?" - lines are removed by evidence, added only from observed failures, never speculatively.
 
@@ -95,8 +95,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 9. **Delete, don't shim.** Remove obsolete paths and update all callers; no compatibility layers, fallbacks, or migrations for code. Data stores are the exception: schema changes follow the migration doctrine (deterministic upgrade path plus legacy-fixture regression - banked stores are irreplaceable).
 10. **Uncertainty under autonomy.** "Ask when uncertain" means make the reversible in-scope assumption, record it, continue; escalate only material, irreversible, spend-bearing, security-sensitive, or captain-owned decisions.
 11. **Secret-safe evidence.** Reports and probe output never print keys, auth headers, or sensitive payloads.
+12. **No self-delegation.** Never re-delegate your task or spawn helper agents unless this brief explicitly grants it; a nested delegation that is not your own is an unaccountable fork of the work.
 
 <!-- provenance
-Directive provenance (spec report b.1): items 1-5 are the fleet report's non-negotiables (each multi-incident); 6 merges fleet section 8.9 with cfb no-broadened-authorization; 7 merges fleet section 8.10 with captain candidate 6; 8 is captain candidate 3; 9 is captain candidate 1 with the data-store carve-out; 10 is cfb gap 8 resolving disagreement D4; 11 is cfb gap 11. Captain candidates 2 and 4 are skipped per the assessment. The precedence section and prune rule are spec b.1 and D2/D3 resolutions; wording is compressed from the b.1 draft to hold the D1 base budget while keeping every directive.
+Directive provenance (spec report b.1): items 1-5 are the fleet report's non-negotiables (each multi-incident); 6 merges fleet section 8.9 with cfb no-broadened-authorization; 7 merges fleet section 8.10 with captain candidate 6; 8 is captain candidate 3; 9 is captain candidate 1 with the data-store carve-out; 10 is cfb gap 8 resolving disagreement D4; 11 is cfb gap 11; 12 is the T2 role-charters dispatch-integration captain directive (firebreak against unaccountable nested delegation). Captain candidates 2 and 4 are skipped per the assessment. The precedence section and prune rule are spec b.1 and D2/D3 resolutions; wording is compressed from the b.1 draft to hold the D1 base budget while keeping every directive.
 Hard constraint: the Karpathy block above is byte-verbatim from roles/karpathy-rules-verbatim.md and hash-pinned by bin/fm-roles-lint.sh; never edit it.
 -->

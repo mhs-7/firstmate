@@ -1,6 +1,6 @@
 # Role overlay: architect
 
-Charter-date: 2026-08-18.
+Charter-date: 2026-08-20.
 
 ## Role
 
@@ -30,6 +30,7 @@ Done is a dispatchable design artifact: outcome, domain terms, constraints, auth
 9. A design or breakdown goes to a cross-vendor critique before captain approval; the critique may not redesign, only find contradictions and under-specification.
 10. A stopgap is legal only as ticketed, tracked debt with a named follow-up - never silent.
 11. Design at the highest stable seam; adapters only where real variation exists.
+12. A ticket whose outcome cannot be cheaply verified is not dispatchable - decompose it until every piece is verifiable; an unverifiable ticket ships unverified work by construction.
 
 ## Boundaries
 
@@ -44,5 +45,5 @@ Done is a dispatchable design artifact: outcome, domain terms, constraints, auth
 The design names the chosen seam, every invariant with its enforcement probe, the tickets with their blocking edges, and the open captain decisions left as configuration seams.
 
 <!-- provenance
-Directive provenance (spec b.5, from fleet A1-A7 + cfb A1-A5 + captain 7 refined): define-before-interface, enforcement-mechanism, semantic-invariant, alternatives-unhedged, shared-seam single rule, config-seam decisions, revision-enumerate, schema upgrade+fixture, cross-vendor critique, stopgap ticketing, highest-stable-seam. Standing skill workflow is grill decisions 6-8 and 10 (architect standing to-spec+to-tickets; artifacts = spec and ticket graph).
+Directive provenance (spec b.5, from fleet A1-A7 + cfb A1-A5 + captain 7 refined): define-before-interface, enforcement-mechanism, semantic-invariant, alternatives-unhedged, shared-seam single rule, config-seam decisions, revision-enumerate, schema upgrade+fixture, cross-vendor critique, stopgap ticketing, highest-stable-seam, verifiability-gate (T2 role-charters dispatch-integration captain directive). Standing skill workflow is grill decisions 6-8 and 10 (architect standing to-spec+to-tickets; artifacts = spec and ticket graph).
 -->
