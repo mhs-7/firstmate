@@ -24,12 +24,16 @@
 # when unconfigured, the endpoint is down, or the model output cannot be parsed.
 #
 # Output:
+#   precheck: skipped (unparseable model output)  exactly one line when the
+#       model output is empty or cannot be parsed; no gap sections are printed
 #   CONCRETE GAPS section    mechanically-checkable gaps the brief/diff exposes
 #   ANNOTATIONS section      uncertain observations the model flagged
 # Exit status is 0 always (usage errors are the only non-zero exit).
 #
 # Ledger: one JSON line per invocation is appended to state/precheck-ledger.jsonl
-# so rounds-saved vs false-holds is measurable over time.
+# so rounds-saved vs false-holds is measurable over time. Unparseable-output
+# skips append a distinct line with "outcome":"skipped_unparseable" (and no
+# gaps/annotations counts) so non-runs are distinguishable from clean runs.
 #
 # Environment:
 #   FM_PRE_CHECK_CURL   curl executable (or mock seam). Default: curl.
@@ -56,6 +60,7 @@ esac
 usage() {
   echo "usage: fm-precheck.sh <task-id> [--diff-range <base>...<tip>] [--brief <path>]" >&2
   echo "       fm-precheck.sh --diff-range <base>...<tip> [--brief <path>]" >&2
+  echo "       Empty or unparseable model output prints: precheck: skipped (unparseable model output)" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -249,6 +254,16 @@ else
   TIPPED=$(git -C "$WT" rev-parse "$COMPARE_REF" 2>/dev/null || true)
 fi
 
+append_unparseable_ledger() {
+  mkdir -p "$STATE"
+  printf '{"task":%s,"tip":%s,"outcome":"skipped_unparseable","timestamp":%s,"diff_source":%s}\n' \
+    "$(printf '%s' "${ID:-ad-hoc}" | jq -R .)" \
+    "$(printf '%s' "${TIPPED:-unknown}" | jq -R .)" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ | jq -R .)" \
+    "$(printf '%s' "$DIFF_SOURCE" | jq -R .)" \
+    >> "$STATE/precheck-ledger.jsonl" 2>/dev/null || true
+}
+
 # --- build the prompt -------------------------------------------------------
 #
 # The model must emit ONLY concrete, mechanically-checkable gaps, plus a
@@ -354,19 +369,39 @@ fi
 
 # OpenAI-compatible endpoints return the model's output as a JSON string inside
 # choices[0].message.content. Some proxies return the {gaps,annotations} object
-# directly. Handle either shape: parse the envelope content when present, else
-# parse the response body itself.
+# directly. Handle either shape: parse the envelope content when present, and
+# parse the response body itself only when it is not an envelope. An envelope
+# whose content is empty or unparseable is unparseable model output, never a
+# direct-object response.
 ENV_CONTENT=$(jq -r '.choices[0].message.content // empty' "$RESP_FILE" 2>/dev/null || true)
 if [ -n "$ENV_CONTENT" ]; then
   GAPS_JSON=$(printf '%s' "$ENV_CONTENT" | jq -c '.gaps // []' 2>/dev/null) || GAPS_JSON=
   ANNOT_JSON=$(printf '%s' "$ENV_CONTENT" | jq -c '.annotations // []' 2>/dev/null) || ANNOT_JSON=
+elif jq -e 'type == "object" and has("choices")' "$RESP_FILE" >/dev/null 2>&1; then
+  GAPS_JSON=
+  ANNOT_JSON=
 else
   GAPS_JSON=$(jq -c '.gaps // []' "$RESP_FILE" 2>/dev/null) || GAPS_JSON=
   ANNOT_JSON=$(jq -c '.annotations // []' "$RESP_FILE" 2>/dev/null) || ANNOT_JSON=
 fi
 
-GAP_COUNT=$(printf '%s' "$GAPS_JSON" | jq 'length' 2>/dev/null || echo 0)
-ANNOT_COUNT=$(printf '%s' "$ANNOT_JSON" | jq 'length' 2>/dev/null || echo 0)
+GAP_COUNT=$(printf '%s' "$GAPS_JSON" | jq 'if type == "array" then length else empty end' 2>/dev/null || true)
+ANNOT_COUNT=$(printf '%s' "$ANNOT_JSON" | jq 'if type == "array" then length else empty end' 2>/dev/null || true)
+
+case "$GAP_COUNT" in
+  ''|*[!0-9]*)
+    append_unparseable_ledger
+    echo "precheck: skipped (unparseable model output)"
+    exit 0
+    ;;
+esac
+case "$ANNOT_COUNT" in
+  ''|*[!0-9]*)
+    append_unparseable_ledger
+    echo "precheck: skipped (unparseable model output)"
+    exit 0
+    ;;
+esac
 
 # --- human-readable output --------------------------------------------------
 
