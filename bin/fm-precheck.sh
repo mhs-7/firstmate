@@ -31,7 +31,9 @@
 # Exit status is 0 always (usage errors are the only non-zero exit).
 #
 # Ledger: one JSON line per invocation is appended to state/precheck-ledger.jsonl
-# so rounds-saved vs false-holds is measurable over time.
+# so rounds-saved vs false-holds is measurable over time. Unparseable-output
+# skips append a distinct line with "outcome":"skipped_unparseable" (and no
+# gaps/annotations counts) so non-runs are distinguishable from clean runs.
 #
 # Environment:
 #   FM_PRE_CHECK_CURL   curl executable (or mock seam). Default: curl.
