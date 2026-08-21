@@ -767,6 +767,9 @@ launch_template() {
     # missing extension. A secondmate therefore launches without the extension
     # and without a semantic busy source or turn-end touch - a known limit
     # recorded in the harness-adapters skill (dated 2026-08-06).
+    # This bare launch is why the ~/.omp/agent/models.yml provider must be
+    # self-sufficient (literal key or PATH-first launcher, never an env-var
+    # name) - see the harness-adapters omp section.
     omp)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'omp __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
