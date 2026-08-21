@@ -181,6 +181,48 @@ test_unparseable_model_output_skips_as_unparseable() {
   pass "unparseable model output is an explicit unparseable skip"
 }
 
+test_empty_envelope_content_skips_as_unparseable() {
+  local home state out rc curl
+  new_case emptyenvelope
+  home="$CASE_DIR"
+  state="$home/state"
+  write_meta "$state"
+  write_endpoint "$home/state/config"
+  curl=$(install_fake_curl)
+  out=$(FM_PRE_CHECK_CURL="$curl" \
+    FAKE_CURL_BODY='{"choices":[{"message":{"content":""}}]}' \
+    run_for_task "$state" "$home" 2>/dev/null); rc=$?
+  expect_code 0 "$rc" "empty envelope content exits 0"
+  [ "$out" = "precheck: skipped (unparseable model output)" ] \
+    || fail "empty envelope content prints exactly one skip line"
+  assert_not_contains "$out" "no concrete gaps" "empty envelope content has no clean verdict"
+  assert_not_contains "$out" "CONCRETE GAPS" "empty envelope content has no gaps section"
+  assert_not_contains "$out" "ANNOTATIONS" "empty envelope content has no annotations section"
+  assert_present "$state/precheck-ledger.jsonl" "empty envelope content appends a ledger line"
+  assert_skip_ledger "$state/precheck-ledger.jsonl" "empty envelope content appends valid skip JSON"
+  pass "envelope with empty content is an explicit unparseable skip"
+}
+
+test_non_array_gaps_skips_as_unparseable() {
+  local home state out rc curl
+  new_case nonarraygaps
+  home="$CASE_DIR"
+  state="$home/state"
+  write_meta "$state"
+  write_endpoint "$home/state/config"
+  curl=$(install_fake_curl)
+  out=$(FM_PRE_CHECK_CURL="$curl" \
+    FAKE_CURL_BODY='{"gaps":"none","annotations":[]}' \
+    run_for_task "$state" "$home" 2>/dev/null); rc=$?
+  expect_code 0 "$rc" "non-array gaps exits 0"
+  [ "$out" = "precheck: skipped (unparseable model output)" ] \
+    || fail "non-array gaps prints exactly one skip line"
+  assert_not_contains "$out" "concrete gap" "non-array gaps has no verdict"
+  assert_present "$state/precheck-ledger.jsonl" "non-array gaps appends a ledger line"
+  assert_skip_ledger "$state/precheck-ledger.jsonl" "non-array gaps appends valid skip JSON"
+  pass "non-array gaps value is an explicit unparseable skip"
+}
+
 test_absent_config_skips_cleanly() {
   local home state out rc
   new_case absentcfg
@@ -290,6 +332,8 @@ test_ad_hoc_diff_range_mode() {
 
 test_empty_model_output_skips_as_unparseable
 test_unparseable_model_output_skips_as_unparseable
+test_empty_envelope_content_skips_as_unparseable
+test_non_array_gaps_skips_as_unparseable
 test_absent_config_skips_cleanly
 test_endpoint_down_skips_cleanly
 test_untouched_file_produces_gap

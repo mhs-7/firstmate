@@ -367,19 +367,24 @@ fi
 
 # OpenAI-compatible endpoints return the model's output as a JSON string inside
 # choices[0].message.content. Some proxies return the {gaps,annotations} object
-# directly. Handle either shape: parse the envelope content when present, else
-# parse the response body itself.
+# directly. Handle either shape: parse the envelope content when present, and
+# parse the response body itself only when it is not an envelope. An envelope
+# whose content is empty or unparseable is unparseable model output, never a
+# direct-object response.
 ENV_CONTENT=$(jq -r '.choices[0].message.content // empty' "$RESP_FILE" 2>/dev/null || true)
 if [ -n "$ENV_CONTENT" ]; then
   GAPS_JSON=$(printf '%s' "$ENV_CONTENT" | jq -c '.gaps // []' 2>/dev/null) || GAPS_JSON=
   ANNOT_JSON=$(printf '%s' "$ENV_CONTENT" | jq -c '.annotations // []' 2>/dev/null) || ANNOT_JSON=
+elif jq -e 'type == "object" and has("choices")' "$RESP_FILE" >/dev/null 2>&1; then
+  GAPS_JSON=
+  ANNOT_JSON=
 else
   GAPS_JSON=$(jq -c '.gaps // []' "$RESP_FILE" 2>/dev/null) || GAPS_JSON=
   ANNOT_JSON=$(jq -c '.annotations // []' "$RESP_FILE" 2>/dev/null) || ANNOT_JSON=
 fi
 
-GAP_COUNT=$(printf '%s' "$GAPS_JSON" | jq 'length' 2>/dev/null || true)
-ANNOT_COUNT=$(printf '%s' "$ANNOT_JSON" | jq 'length' 2>/dev/null || true)
+GAP_COUNT=$(printf '%s' "$GAPS_JSON" | jq 'if type == "array" then length else empty end' 2>/dev/null || true)
+ANNOT_COUNT=$(printf '%s' "$ANNOT_JSON" | jq 'if type == "array" then length else empty end' 2>/dev/null || true)
 
 case "$GAP_COUNT" in
   ''|*[!0-9]*)
