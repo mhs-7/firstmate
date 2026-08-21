@@ -24,6 +24,8 @@
 # when unconfigured, the endpoint is down, or the model output cannot be parsed.
 #
 # Output:
+#   precheck: skipped (unparseable model output)  exactly one line when the
+#       model output is empty or cannot be parsed; no gap sections are printed
 #   CONCRETE GAPS section    mechanically-checkable gaps the brief/diff exposes
 #   ANNOTATIONS section      uncertain observations the model flagged
 # Exit status is 0 always (usage errors are the only non-zero exit).
@@ -56,6 +58,7 @@ esac
 usage() {
   echo "usage: fm-precheck.sh <task-id> [--diff-range <base>...<tip>] [--brief <path>]" >&2
   echo "       fm-precheck.sh --diff-range <base>...<tip> [--brief <path>]" >&2
+  echo "       Empty or unparseable model output prints: precheck: skipped (unparseable model output)" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -249,6 +252,16 @@ else
   TIPPED=$(git -C "$WT" rev-parse "$COMPARE_REF" 2>/dev/null || true)
 fi
 
+append_unparseable_ledger() {
+  mkdir -p "$STATE"
+  printf '{"task":%s,"tip":%s,"outcome":"skipped_unparseable","timestamp":%s,"diff_source":%s}\n' \
+    "$(printf '%s' "${ID:-ad-hoc}" | jq -R .)" \
+    "$(printf '%s' "${TIPPED:-unknown}" | jq -R .)" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ | jq -R .)" \
+    "$(printf '%s' "$DIFF_SOURCE" | jq -R .)" \
+    >> "$STATE/precheck-ledger.jsonl" 2>/dev/null || true
+}
+
 # --- build the prompt -------------------------------------------------------
 #
 # The model must emit ONLY concrete, mechanically-checkable gaps, plus a
@@ -365,8 +378,23 @@ else
   ANNOT_JSON=$(jq -c '.annotations // []' "$RESP_FILE" 2>/dev/null) || ANNOT_JSON=
 fi
 
-GAP_COUNT=$(printf '%s' "$GAPS_JSON" | jq 'length' 2>/dev/null || echo 0)
-ANNOT_COUNT=$(printf '%s' "$ANNOT_JSON" | jq 'length' 2>/dev/null || echo 0)
+GAP_COUNT=$(printf '%s' "$GAPS_JSON" | jq 'length' 2>/dev/null || true)
+ANNOT_COUNT=$(printf '%s' "$ANNOT_JSON" | jq 'length' 2>/dev/null || true)
+
+case "$GAP_COUNT" in
+  ''|*[!0-9]*)
+    append_unparseable_ledger
+    echo "precheck: skipped (unparseable model output)"
+    exit 0
+    ;;
+esac
+case "$ANNOT_COUNT" in
+  ''|*[!0-9]*)
+    append_unparseable_ledger
+    echo "precheck: skipped (unparseable model output)"
+    exit 0
+    ;;
+esac
 
 # --- human-readable output --------------------------------------------------
 

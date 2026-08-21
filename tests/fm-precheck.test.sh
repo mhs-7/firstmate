@@ -122,7 +122,64 @@ run_for_task() {  # <state> <home>
     "$PRECHECK" task-x1
 }
 
+assert_skip_ledger() {  # <ledger> <label>
+  local ledger=$1 label=$2
+  jq -e \
+    'select(.outcome == "skipped_unparseable" and .task == "task-x1" and (.tip | type) == "string" and (.timestamp | type) == "string" and (.diff_source | type) == "string" and (has("gaps") | not) and (has("annotations") | not))' \
+    "$ledger" >/dev/null || fail "$label"
+}
+
+assert_success_ledger() {  # <ledger> <label>
+  local ledger=$1 label=$2
+  jq -e \
+    'select(.task == "task-x1" and .gaps == 1 and .annotations == 1 and (has("outcome") | not) and (.tip | type) == "string" and (.timestamp | type) == "string" and (.diff_source | type) == "string")' \
+    "$ledger" >/dev/null || fail "$label"
+}
+
 # --- tests ------------------------------------------------------------------
+
+test_empty_model_output_skips_as_unparseable() {
+  local home state out rc curl
+  new_case emptyoutput
+  home="$CASE_DIR"
+  state="$home/state"
+  write_meta "$state"
+  write_endpoint "$home/state/config"
+  curl=$(install_fake_curl)
+  out=$(FM_PRE_CHECK_CURL="$curl" FAKE_CURL_BODY='' \
+    run_for_task "$state" "$home" 2>/dev/null); rc=$?
+  expect_code 0 "$rc" "empty model output exits 0"
+  [ "$out" = "precheck: skipped (unparseable model output)" ] \
+    || fail "empty model output prints exactly one skip line"
+  assert_not_contains "$out" "no concrete gaps" "empty model output has no clean verdict"
+  assert_not_contains "$out" "CONCRETE GAPS" "empty model output has no gaps section"
+  assert_not_contains "$out" "ANNOTATIONS" "empty model output has no annotations section"
+  assert_present "$state/precheck-ledger.jsonl" "empty model output appends a ledger line"
+  assert_skip_ledger "$state/precheck-ledger.jsonl" "empty model output appends valid skip JSON"
+  pass "empty model output is an explicit unparseable skip"
+}
+
+test_unparseable_model_output_skips_as_unparseable() {
+  local home state out rc curl
+  new_case invalidoutput
+  home="$CASE_DIR"
+  state="$home/state"
+  write_meta "$state"
+  write_endpoint "$home/state/config"
+  curl=$(install_fake_curl)
+  out=$(FM_PRE_CHECK_CURL="$curl" \
+    FAKE_CURL_BODY='{"choices":[{"message":{"content":"not valid json"}}]}' \
+    run_for_task "$state" "$home" 2>/dev/null); rc=$?
+  expect_code 0 "$rc" "unparseable model output exits 0"
+  [ "$out" = "precheck: skipped (unparseable model output)" ] \
+    || fail "unparseable model output prints exactly one skip line"
+  assert_not_contains "$out" "no concrete gaps" "unparseable model output has no clean verdict"
+  assert_not_contains "$out" "CONCRETE GAPS" "unparseable model output has no gaps section"
+  assert_not_contains "$out" "ANNOTATIONS" "unparseable model output has no annotations section"
+  assert_present "$state/precheck-ledger.jsonl" "unparseable model output appends a ledger line"
+  assert_skip_ledger "$state/precheck-ledger.jsonl" "unparseable model output appends valid skip JSON"
+  pass "unparseable model output is an explicit unparseable skip"
+}
 
 test_absent_config_skips_cleanly() {
   local home state out rc
@@ -173,6 +230,7 @@ test_untouched_file_produces_gap() {
     FAKE_CURL_CAPTURE="$capture" \
     run_for_task "$state" "$home" 2>/dev/null); rc=$?
   expect_code 0 "$rc" "healthy check exits 0"
+  assert_contains "$out" "precheck: found 1 concrete gap(s)" "healthy check prints the standard verdict"
   assert_contains "$out" "CONCRETE GAPS" "render a CONCRETE GAPS section"
   assert_contains "$out" "file-untouched" "gap type is file-untouched"
   assert_contains "$out" "config.required" "gap names the untouched file"
@@ -182,6 +240,7 @@ test_untouched_file_produces_gap() {
   assert_grep "config.required" "$capture" "the untouched file is named in the sent brief"
   assert_grep '"task":"task-x1"' "$state/precheck-ledger.jsonl" "ledger records the task id"
   assert_grep '"gaps":1' "$state/precheck-ledger.jsonl" "ledger records one gap"
+  assert_success_ledger "$state/precheck-ledger.jsonl" "parseable output retains the successful ledger shape"
   rm -f "$capture"
   pass "untouched file produces a file-untouched gap grounded in brief+diff and appends the ledger"
 }
@@ -229,6 +288,8 @@ test_ad_hoc_diff_range_mode() {
   pass "ad-hoc --diff-range mode resolves and records the diff"
 }
 
+test_empty_model_output_skips_as_unparseable
+test_unparseable_model_output_skips_as_unparseable
 test_absent_config_skips_cleanly
 test_endpoint_down_skips_cleanly
 test_untouched_file_produces_gap
