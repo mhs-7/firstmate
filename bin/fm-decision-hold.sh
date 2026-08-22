@@ -37,6 +37,15 @@
 # It writes the captain decision and routed identities into the hold body, clears
 # those dependency edges, and only then marks the hold Done. A failure before the
 # final step leaves the captain hold open.
+#
+# Done retention moves closed items from the live backlog into the Done archive
+# without changing their serialized form, so verify and complete accept a
+# kind-captain archived item carrying the resolution marker as the same durably
+# resolved hold. A later verify of an origin whose volatile state records were
+# already cleaned up proves the completed lifecycle from that store alone: every
+# <origin>-decision-<key> identity found in the live backlog or the archive must
+# be durably held or durably resolved, and an origin with neither completion
+# metadata nor any archived resolution still fails.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -184,9 +193,29 @@ verify_hold_resolved() {  # <hold-id>
   return 1
 }
 
+verify_hold_archived() {  # <hold-id>
+  local id=$1 archive="$DATA/done-archive.md" block
+  [ -f "$archive" ] || return 1
+  block=$(awk -v prefix="- [x] $id - " '
+    { if (index($0, prefix) == 1) active = 1 }
+    active && $0 != "" && $0 !~ /^[[:space:]]/ && index($0, prefix) != 1 { active = 0 }
+    active { buf = buf $0 "\n" }
+    END { printf "%s", buf }
+  ' "$archive")
+  [ -n "$block" ] || return 1
+  case "$block" in
+    *"(kind: captain)"*"Resolution recorded by fm-decision-hold."*) return 0 ;;
+  esac
+  return 1
+}
+
 verify_hold_durable() {  # <hold-id>
   local id=$1 show state held kind hold_kind body
-  show=$(task_show "$id") || fail "captain decision $id is absent from $FM_HOME/data/backlog.md"
+  if ! show=$(task_show "$id"); then
+    verify_hold_archived "$id" \
+      || fail "captain decision $id is absent from $FM_HOME/data/backlog.md and its Done archive"
+    return 0
+  fi
   state=$(show_field "$show" state)
   held=$(show_field "$show" held)
   kind=$(show_field "$show" kind)
@@ -337,13 +366,64 @@ EOF
   printf 'complete: %s decision inventory reviewed%s\n' "$origin" "${keys:+ ($keys)}"
 }
 
+backlog_decision_keys() {  # <origin-id>
+  local origin=$1
+  {
+    [ -f "$FM_HOME/data/backlog.md" ] && sed -n 's/^- \[[xX ]\] //p' "$FM_HOME/data/backlog.md"
+    [ -f "$DATA/done-archive.md" ] && sed -n 's/^- \[[xX]\] //p' "$DATA/done-archive.md"
+    true
+  } | while read -r id _rest; do
+    case "$id" in
+      "$origin"-decision-*) ;;
+      *) continue ;;
+    esac
+    key=${id#"$origin"-decision-}
+    case "$key" in
+      ''|*[!A-Za-z0-9._-]*) continue ;;
+    esac
+    printf '%s\n' "$key"
+  done | LC_ALL=C sort -u
+}
+
+# An earlier successful cleanup may already have removed an origin's volatile
+# state records. Verify can then still honor the completed lifecycle from the
+# durable backlog store alone: every decision identity this origin left there
+# must be durably held or durably resolved, and every structured decision still
+# open in surviving status must be one of them. An origin with no decision
+# identity anywhere has no completed inventory and keeps failing.
+verify_completed_lifecycle_from_backlog() {  # <origin-id>
+  local origin=$1 keys key open
+  keys=$(sorted_key_union "" "$(backlog_decision_keys "$origin")")
+  [ -n "$keys" ] \
+    || fail "origin $origin has no completed unresolved-decision inventory in its backlog or Done archive"
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    verify_hold_durable "$(hold_id "$origin" "$key")"
+  done <<EOF
+$(printf '%s\n' "$keys" | tr ',' '\n')
+EOF
+  open=$(origin_open_decisions "$origin")
+  while IFS=$'\t' read -r key _verb _summary; do
+    [ -n "$key" ] || continue
+    list_has_key "$keys" "$key" \
+      || fail "open structured decision $origin/$key is outside the completed inventory"
+    verify_hold_durable "$(hold_id "$origin" "$key")"
+  done <<EOF
+$open
+EOF
+}
+
 command_verify() {
   local origin=${1:-} meta reviewed keys key open
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   meta="$STATE/$origin.meta"
-  [ -f "$meta" ] || fail "origin metadata is absent: $meta"
   require_tasks_axi
+  if [ ! -f "$meta" ]; then
+    verify_completed_lifecycle_from_backlog "$origin"
+    printf 'verified: %s unresolved-decision inventory\n' "$origin"
+    return 0
+  fi
   reviewed=$(meta_value "$meta" decisions_reviewed)
   [ "$reviewed" = 1 ] || fail "origin $origin has no completed unresolved-decision inventory"
   keys=$(meta_value "$meta" decision_keys)

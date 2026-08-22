@@ -550,6 +550,115 @@ test_resolve_matches_quoted_blocked_by_edges() {
   pass "resolve matches first/middle/last in quoted blocked_by and rejects a genuinely absent id"
 }
 
+# Drives one full hold-complete-resolve-prune cycle against real tasks-axi
+# mechanics so each test observes the exact serialization Done retention leaves
+# behind: the closed hold leaves the live backlog and lands in data/done-archive.md.
+hold_resolve_prune() {  # <home> <id> <key> <title> <reason> <decision-text>
+  local home=$1 id=$2 key=$3 title=$4 reason=$5 decision=$6 hold
+  hold=$(run_decisions "$home" hold "$id" "$key" \
+    --title "$title" --reason "$reason" --repo sample) \
+    || fail "could not register the $key hold"
+  run_decisions "$home" complete "$id" "$key" >/dev/null \
+    || fail "could not complete the $key inventory"
+  tasks_in "$home" add "sample-$key-fix" "Apply the chosen $key" \
+    --kind ship --repo sample >/dev/null \
+    || fail "could not create the $key dependent"
+  tasks_in "$home" block "sample-$key-fix" --by "$hold" >/dev/null \
+    || fail "could not route the $key dependent"
+  printf '%s\n' "$decision" > "$home/$key-decision.txt"
+  run_decisions "$home" resolve "$id" "$key" \
+    --decision-file "$home/$key-decision.txt" \
+    --routed-to "sample-$key-fix" >/dev/null \
+    || fail "could not resolve the $key decision"
+  tasks_in "$home" prune --keep 0 --state 'done' >/dev/null \
+    || fail "could not prune the Done section"
+  if tasks_in "$home" show "$hold" --full >/dev/null 2>&1; then
+    fail "the $key hold was not pruned out of the live backlog"
+  fi
+  assert_grep "$hold" "$home/data/done-archive.md" \
+    "the pruned $key hold did not reach the Done archive"
+  printf '%s\n' "$hold"
+}
+
+make_scout_fixture() {  # <home> <id>
+  local home=$1 id=$2
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Review the $id sample" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the $id origin"
+  write_origin_meta "$home" "$id"
+  printf 'done: report and visual review complete\n' > "$home/state/$id.status"
+  printf '# %s\n\nOne captain choice remains.\n' "$id" > "$home/data/$id/report.md"
+}
+
+# Reproduces the reported gate failure: a captain hold RESOLVED and closed before
+# Done-retention moved it into the archive must still verify as durably resolved,
+# and scout teardown must pass the same gate instead of refusing forever.
+test_resolved_hold_verifies_after_done_retention_pruning() {
+  local home id
+  home=$(make_home pruned-resolution)
+  id=sample-prune-review
+  make_scout_fixture "$home" "$id"
+  hold_resolve_prune "$home" "$id" boundary \
+    "Choose the sample boundary" "captain boundary pending" \
+    "Use the spine-derived sample boundary." >/dev/null
+  run_decisions "$home" verify "$id" >/dev/null \
+    || fail "verify refused an origin whose resolved hold was pruned by Done retention"
+  run_teardown "$home" "$id" >/dev/null 2> "$home/teardown.err" \
+    || fail "scout teardown refused a resolved-then-pruned lifecycle: $(cat "$home/teardown.err")"
+  pass "a resolved hold verifies and tears down after Done-retention pruning"
+}
+
+# Reproduces the reaped-metadata shape of the same live incident: an earlier
+# cleanup already removed the origin's state records, so verify must prove the
+# completed lifecycle from the durable backlog store alone, while an origin with
+# neither metadata nor any archived resolution keeps refusing.
+test_verify_honors_archived_lifecycle_without_origin_metadata() {
+  local home id ghost
+  home=$(make_home reaped-metadata)
+  id=sample-reaped-review
+  make_scout_fixture "$home" "$id"
+  hold_resolve_prune "$home" "$id" lane \
+    "Choose the sample lane" "captain lane pending" \
+    "Keep the paused lane paused until the fix lands." >/dev/null
+  rm -f "$home/state/$id.meta" "$home/state/$id.status"
+  run_decisions "$home" verify "$id" >/dev/null \
+    || fail "verify required volatile metadata to honor an archived completed lifecycle"
+
+  ghost=sample-ghost-review
+  mkdir -p "$home/data/$ghost"
+  printf '# Ghost review\n\nNo decision inventory was ever recorded.\n' > "$home/data/$ghost/report.md"
+  if run_decisions "$home" verify "$ghost" > "$home/ghost.out" 2> "$home/ghost.err"; then
+    fail "verify accepted an origin with no completion record anywhere"
+  fi
+  assert_grep "has no completed unresolved-decision inventory" "$home/ghost.err" \
+    "the never-existed refusal lost its actionable message"
+  pass "archived lifecycles verify without metadata while never-existed origins still refuse"
+}
+
+# An attestation naming a key whose hold has no durable record anywhere must keep
+# refusing: the Done-archive fallback may not whitewash keys that never resolved.
+test_stale_inventory_keys_still_require_durable_holds() {
+  local home id
+  home=$(make_home stale-inventory)
+  id=sample-stale-review
+  make_scout_fixture "$home" "$id"
+  fm_write_meta "$home/state/$id.meta" \
+    "window=firstmate:fm-$id" \
+    "worktree=$home/projects/missing-$id" \
+    "project=$home/projects/sample" \
+    "harness=codex" \
+    "kind=scout" \
+    "mode=scout" \
+    "decisions_reviewed=1" \
+    "decision_keys=phantom"
+  if run_decisions "$home" verify "$id" > "$home/stale.out" 2> "$home/stale.err"; then
+    fail "verify accepted an inventoried key with no durable hold anywhere"
+  fi
+  assert_grep "phantom" "$home/stale.err" "the refusal did not name the undurable key"
+  assert_grep "Done archive" "$home/stale.err" "the refusal did not name both searched locations"
+  pass "inventoried keys without any durable hold still refuse verification"
+}
+
 test_uninventoried_report_decision_refuses_completion
 
 test_scout_teardown_always_requires_inventory_verification
@@ -560,3 +669,6 @@ test_none_inventory_and_resolved_prose_do_not_create_holds
 test_terminal_single_owner_status_decision_does_not_block_empty_inventory
 test_secondmate_hold_stays_in_authoritative_home
 test_resolve_matches_quoted_blocked_by_edges
+test_resolved_hold_verifies_after_done_retention_pruning
+test_verify_honors_archived_lifecycle_without_origin_metadata
+test_stale_inventory_keys_still_require_durable_holds
