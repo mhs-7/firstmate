@@ -767,6 +767,7 @@ launch_template() {
     # missing extension. A secondmate therefore launches without the extension
     # and without a semantic busy source or turn-end touch - a known limit
     # recorded in the harness-adapters skill (dated 2026-08-06).
+    # Provider-key requirements for this bare launch: see the harness-adapters omp section.
     omp)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'omp __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'

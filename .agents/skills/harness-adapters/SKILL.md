@@ -325,6 +325,11 @@ An explicit `-e` path loads without any project trust dialog (verified live).
 omp carries no launch-time selection marker env var: detection is `OMPCODE=1` (checked before `CLAUDECODE=1`) plus the `bun`/`omp` ancestry match, so nothing needs a `FM_PI_HARNESS`-style prefix.
 Keep the brief as one positional argument, matching pi.
 
+**Provider self-sufficiency (hit live 2026-08-06): fm-spawn launches omp bare.**
+fm-spawn's omp template launches bare `omp`, so the `~/.omp/agent/models.yml` provider must be self-sufficient: a literal `apiKey` in the file (chmod 600, the meshbox key-file convention) or a PATH-first launcher.
+An env-var `apiKey` name fails because nothing exports it at spawn.
+A misconfigured provider shows as silent empty turns plus a 400 "No connected db" from the router; treat that signature as a provider-config problem before inspecting the adapter.
+
 **Known limit (dated 2026-08-06): an omp SECONDMATE has no turn-end or busy-state signal.**
 The per-task extension is written only for ship/scout spawns, so `fm-spawn --secondmate` launches omp WITHOUT `-e` rather than pointing it at a file that is never created.
 An omp secondmate therefore reports no semantic busy state and touches no turn-end marker, and falls back to stale-detection alone.
